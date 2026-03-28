@@ -1,4 +1,9 @@
-# crdt
+# commute
+
+A CRDT-based key-value store inspired by [Riak](https://riak.com/). Built for learning.
+
+Based on Shapiro et al.,
+[A comprehensive study of Convergent and Commutative Replicated Data Types](https://inria.hal.science/inria-00555588/document).
 
 ## Disclaimer
 
