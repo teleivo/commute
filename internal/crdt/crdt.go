@@ -15,22 +15,24 @@ type NodeID string
 // Overflow is not handled. Per the Shapiro paper, the specification assumes no overflow. A uint64
 // counter incrementing once per nanosecond takes ~584 years to overflow.
 type GCounter struct {
-	nodeID   NodeID
-	counters map[NodeID]uint64
+	// TODO only exporting fields to get gossip to work quickly, unexport again once done and think
+	// more about Message type
+	NodeID   NodeID
+	Counters map[NodeID]uint64
 }
 
 // NewGCounter creates a GCounter owned by the given node.
 func NewGCounter(nodeID NodeID) *GCounter {
 	return &GCounter{
-		nodeID:   nodeID,
-		counters: make(map[NodeID]uint64),
+		NodeID:   nodeID,
+		Counters: make(map[NodeID]uint64),
 	}
 }
 
 // Value returns the counter total across all nodes.
 func (g *GCounter) Value() uint64 {
 	var sum uint64
-	for _, v := range g.counters {
+	for _, v := range g.Counters {
 		sum += v
 	}
 	return sum
@@ -38,12 +40,12 @@ func (g *GCounter) Value() uint64 {
 
 // Merge incorporates the state of other into g by taking the max of each node's counter.
 func (g *GCounter) Merge(other *GCounter) {
-	for id, v := range other.counters {
-		g.counters[id] = max(g.counters[id], v)
+	for id, v := range other.Counters {
+		g.Counters[id] = max(g.Counters[id], v)
 	}
 }
 
 // Increment adds n to this node's counter.
 func (g *GCounter) Increment(n uint64) {
-	g.counters[g.nodeID] += n
+	g.Counters[g.NodeID] += n
 }

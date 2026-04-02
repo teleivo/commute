@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"time"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
@@ -114,6 +115,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	}
 	port := flags.String("port", "0", "HTTP server port (0 for a random available port)")
 	nodeID := flags.String("nodeid", "", "unique node identifier (required)")
+	peers := flags.String("peers", "", "comma-separated list of peer addresses (e.g. host1:7946,host2:7946)")
+	gossipInterval := flags.Duration("gossipinterval", 5*time.Second, "how often to push state to a random peer")
 	debug := flags.Bool("debug", false, "enable debug logging")
 	cpuProfile := flags.String("cpuprofile", "", "write cpu profile to `file`")
 	memProfile := flags.String("memprofile", "", "write memory profile to `file`")
@@ -132,10 +135,12 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 
 	err = profile(func() error {
 		srv, err := server.New(server.Config{
-			NodeID: *nodeID,
-			Port:   *port,
-			Debug:  *debug,
-			Stderr: os.Stderr,
+			NodeID:         *nodeID,
+			Port:           *port,
+			Peers:          *peers,
+			GossipInterval: *gossipInterval,
+			Debug:          *debug,
+			Stderr:         os.Stderr,
 		})
 		if err != nil {
 			return err

@@ -2,8 +2,6 @@
 
 ## Phase 1 — G-Counter
 
-* implement co HTTP server
-  * `POST /types/counters/keys/{key}` with `{"increment": N}` body
-  * `GET /types/counters/keys/{key}` returning `{"value": N}`
-* HTTP integration tests over httptest.Server with real handler, no mocks
-  * increment once, increment multiple, fetch empty key, fetch after increments
+* Unexport GCounter fields, define proper Message type for gossip
+* Docker setup: run 3-node cluster locally
+* `/metrics` endpoint (hand-rolled counters, no Prometheus yet)

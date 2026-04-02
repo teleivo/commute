@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/teleivo/assertive/assert"
 	"github.com/teleivo/assertive/require"
@@ -113,9 +114,11 @@ func TestCounterSeparateKeys(t *testing.T) {
 func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
-		NodeID: "test-node",
-		Port:   "0",
-		Stderr: io.Discard,
+		NodeID:         "test-node",
+		Port:           "0",
+		Peers:          "127.0.0.1:9999",
+		GossipInterval: 1 * time.Second,
+		Stderr:         io.Discard,
 	})
 	require.NoError(t, err)
 	return srv

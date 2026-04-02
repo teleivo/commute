@@ -17,15 +17,15 @@ func TestGCounterValue(t *testing.T) {
 		},
 		"SingleNode": {
 			counter: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 5},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 5},
 			},
 			want: 5,
 		},
 		"MultipleNodes": {
 			counter: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 3, "b": 7, "c": 2},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 3, "b": 7, "c": 2},
 			},
 			want: 12,
 		},
@@ -66,52 +66,52 @@ func TestGCounterMerge(t *testing.T) {
 		"MergeIntoEmpty": {
 			a: NewGCounter("a"),
 			b: &GCounter{
-				nodeID:   "b",
-				counters: map[NodeID]uint64{"b": 5},
+				NodeID:   "b",
+				Counters: map[NodeID]uint64{"b": 5},
 			},
 			want: 5,
 		},
 		"DisjointNodes": {
 			a: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 3},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 3},
 			},
 			b: &GCounter{
-				nodeID:   "b",
-				counters: map[NodeID]uint64{"b": 7},
+				NodeID:   "b",
+				Counters: map[NodeID]uint64{"b": 7},
 			},
 			want: 10,
 		},
 		"OverlappingTakesMax": {
 			a: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 3, "b": 5},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 3, "b": 5},
 			},
 			b: &GCounter{
-				nodeID:   "b",
-				counters: map[NodeID]uint64{"a": 1, "b": 9},
+				NodeID:   "b",
+				Counters: map[NodeID]uint64{"a": 1, "b": 9},
 			},
 			want: 12,
 		},
 		"MergeSelf": {
 			a: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 5},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 5},
 			},
 			b: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 5},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 5},
 			},
 			want: 5,
 		},
 		"ThreeNodes": {
 			a: &GCounter{
-				nodeID:   "a",
-				counters: map[NodeID]uint64{"a": 2, "b": 4, "c": 1},
+				NodeID:   "a",
+				Counters: map[NodeID]uint64{"a": 2, "b": 4, "c": 1},
 			},
 			b: &GCounter{
-				nodeID:   "b",
-				counters: map[NodeID]uint64{"a": 3, "b": 3, "c": 6},
+				NodeID:   "b",
+				Counters: map[NodeID]uint64{"a": 3, "b": 3, "c": 6},
 			},
 			want: 13,
 		},

@@ -1,15 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,16 +22,24 @@ import (
 )
 
 type Server struct {
-	logger *slog.Logger
-	server *http.Server
-	store  *Store
+	logger         *slog.Logger
+	server         *http.Server
+	store          *Store
+	peers          []string
+	gossipInterval time.Duration
+	client         *http.Client
+	rng            *rand.Rand
 }
 
 type Config struct {
-	NodeID string
-	Port   string    // HTTP server port (use "0" for a random available port)
-	Debug  bool      // enable debug logging
-	Stderr io.Writer // output for error logging
+	NodeID         string
+	Port           string        // HTTP server port (use "0" for a random available port)
+	Peers          string        // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
+	GossipInterval time.Duration // how often to push state to a random peer
+	Client         *http.Client  // HTTP client for gossip
+	Rng            *rand.Rand    // random source for peer selection
+	Debug          bool          // enable debug logging
+	Stderr         io.Writer     // output for error logging
 }
 
 func New(cfg Config) (*Server, error) {
@@ -37,7 +50,27 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid port %q, must be in range 1-65535", cfg.Port)
 	}
+	if cfg.Peers == "" {
+		return nil, errors.New("at least one peer is required")
+	}
+	peers := make(map[string]struct{})
+	for _, p := range strings.Split(cfg.Peers, ",") {
+		p = strings.TrimSpace(p)
+		_, err := netip.ParseAddrPort(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer %q: %s", p, err)
+		}
+		peers["http://"+p] = struct{}{}
+	}
+	if cfg.GossipInterval <= 0 {
+		return nil, errors.New("gossip interval must be greater than zero")
+	}
 
+	level := slog.LevelInfo
+	if cfg.Debug {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
 	handler := http.NewServeMux()
 	server := http.Server{
 		Addr:        addr.String(),
@@ -45,18 +78,26 @@ func New(cfg Config) (*Server, error) {
 		ReadTimeout: 3 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}
-	level := slog.LevelInfo
-	if cfg.Debug {
-		level = slog.LevelDebug
+	client := cfg.Client
+	if client == nil {
+		client = &http.Client{}
 	}
-	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
+	rng := cfg.Rng
+	if rng == nil {
+		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	}
 	srv := &Server{
-		logger: logger,
-		server: &server,
-		store:  NewStore(crdt.NodeID(cfg.NodeID)),
+		logger:         logger,
+		server:         &server,
+		store:          NewStore(crdt.NodeID(cfg.NodeID)),
+		peers:          slices.Sorted(maps.Keys(peers)),
+		gossipInterval: cfg.GossipInterval,
+		client:         client,
+		rng:            rng,
 	}
 	handler.HandleFunc("GET /types/counters/keys/{key}", srv.getCounters)
 	handler.HandleFunc("POST /types/counters/keys/{key}", srv.postCounters)
+	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	return srv, nil
 }
 
@@ -76,10 +117,51 @@ func (srv *Server) Start(ctx context.Context) error {
 		}
 	}()
 
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		srv.StartGossip(ctx)
+	})
+
 	if err := srv.server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	wg.Wait()
 	return nil
+}
+
+func (srv *Server) StartGossip(ctx context.Context) {
+	t := time.NewTicker(srv.gossipInterval)
+	defer t.Stop()
+	timeout := srv.gossipInterval / 2
+	for {
+		select {
+		case <-t.C:
+			peer := srv.peers[srv.rng.IntN(len(srv.peers))]
+			srv.store.muCounters.RLock()
+			b, err := json.Marshal(srv.store.counters)
+			srv.store.muCounters.RUnlock()
+			if err != nil {
+				panic(err)
+			}
+
+			reqCtx, cancel := context.WithTimeout(ctx, timeout)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, peer+"/internal/gossip", bytes.NewReader(b))
+			if err != nil {
+				cancel()
+				panic(err)
+			}
+			req.Header.Add("Content-Type", "application/json")
+			resp, err := srv.client.Do(req)
+			cancel()
+			if err != nil {
+				srv.logger.Warn("failed to gossip full state", "error", err)
+				continue
+			}
+			_ = resp.Body.Close()
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +176,8 @@ type counterResponseBody struct {
 	Value uint64 `json:"value"`
 }
 
+type Message map[string]*crdt.GCounter
+
 type Store struct {
 	nodeID     crdt.NodeID
 	muCounters sync.RWMutex
@@ -107,6 +191,41 @@ func NewStore(nodeID crdt.NodeID) *Store {
 	}
 }
 
+func (st *Store) IncrementCounter(key string, value uint64) {
+	st.muCounters.Lock()
+	counter, ok := st.counters[key]
+	if !ok {
+		counter = crdt.NewGCounter(st.nodeID)
+		st.counters[key] = counter
+	}
+	counter.Increment(value)
+	st.muCounters.Unlock()
+}
+
+func (st *Store) GetCounter(key string) (uint64, bool) {
+	st.muCounters.RLock()
+	counter, ok := st.counters[key]
+	if !ok {
+		st.muCounters.RUnlock()
+		return 0, false
+	}
+	value := counter.Value()
+	st.muCounters.RUnlock()
+	return value, true
+}
+
+func (st *Store) Merge(msg Message) {
+	st.muCounters.Lock()
+	for k, counter := range msg {
+		if _, ok := st.counters[k]; ok {
+			st.counters[k].Merge(counter)
+		} else {
+			st.counters[k] = counter
+		}
+	}
+	st.muCounters.Unlock()
+}
+
 func (srv *Server) getCounters(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -114,15 +233,11 @@ func (srv *Server) getCounters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv.store.muCounters.RLock()
-	counter, ok := srv.store.counters[key]
+	value, ok := srv.store.GetCounter(key)
 	if !ok {
-		srv.store.muCounters.RUnlock()
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	value := counter.Value()
-	srv.store.muCounters.RUnlock()
 
 	resp := counterResponseBody{
 		Value: value,
@@ -145,9 +260,6 @@ func (srv *Server) postCounters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := io.ReadAll(r.Body)
-	defer func() {
-		_ = r.Body.Close()
-	}()
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -159,15 +271,30 @@ func (srv *Server) postCounters(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	srv.store.IncrementCounter(key, body.Increment)
 
-	srv.store.muCounters.Lock()
-	counter, ok := srv.store.counters[key]
-	if !ok {
-		counter = crdt.NewGCounter(srv.store.nodeID)
-		srv.store.counters[key] = counter
+	w.WriteHeader(http.StatusOK)
+}
+
+func (srv *Server) postGossip(w http.ResponseWriter, r *http.Request) {
+	if r.Body == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
-	counter.Increment(body.Increment)
-	srv.store.muCounters.Unlock()
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body Message
+	err = json.Unmarshal(b, &body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	srv.store.Merge(body)
 
 	w.WriteHeader(http.StatusOK)
 }
