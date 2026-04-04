@@ -39,6 +39,7 @@ type Config struct {
 	GossipInterval time.Duration // how often to push state to a random peer
 	Client         *http.Client  // HTTP client for gossip
 	Rng            *rand.Rand    // random source for peer selection
+	Clock          crdt.Clock    // clock for LWW timestamps
 	Debug          bool          // enable debug logging
 	Stderr         io.Writer     // output for error logging
 }
@@ -94,10 +95,14 @@ func New(cfg Config) (*Server, error) {
 	if rng == nil {
 		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
+	clock := cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
 	srv := &Server{
 		logger:         logger,
 		server:         &server,
-		store:          NewStore(crdt.NodeID(cfg.NodeID)),
+		store:          NewStore(crdt.NodeID(cfg.NodeID), clock),
 		peers:          slices.Sorted(maps.Keys(peers)),
 		gossipInterval: cfg.GossipInterval,
 		client:         client,
@@ -105,6 +110,8 @@ func New(cfg Config) (*Server, error) {
 	}
 	handler.HandleFunc("GET /types/counters/keys/{key}", srv.getCounters)
 	handler.HandleFunc("POST /types/counters/keys/{key}", srv.postCounters)
+	handler.HandleFunc("GET /types/registers/keys/{key}", srv.getRegister)
+	handler.HandleFunc("PUT /types/registers/keys/{key}", srv.putRegister)
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	return srv, nil
 }
@@ -148,7 +155,7 @@ func (srv *Server) StartGossip(ctx context.Context) {
 		select {
 		case <-t.C:
 			peer := srv.peers[srv.rng.IntN(len(srv.peers))]
-			b, err := srv.store.MarshalCounters()
+			b, err := srv.store.MarshalState()
 			if err != nil {
 				panic(err)
 			}
@@ -178,12 +185,12 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	srv.server.Handler.ServeHTTP(w, r)
 }
 
-type counterRequestBody struct {
+type counterRequest struct {
 	Increment uint64 `json:"increment"`
 	Decrement uint64 `json:"decrement"`
 }
 
-type counterResponseBody struct {
+type counterResponse struct {
 	Value int64 `json:"value"`
 }
 
@@ -200,7 +207,7 @@ func (srv *Server) getCounters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := counterResponseBody{
+	resp := counterResponse{
 		Value: value,
 	}
 	e := json.NewEncoder(w)
@@ -226,7 +233,7 @@ func (srv *Server) postCounters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body counterRequestBody
+	var body counterRequest
 	err = json.Unmarshal(b, &body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -241,6 +248,64 @@ func (srv *Server) postCounters(w http.ResponseWriter, r *http.Request) {
 	} else {
 		srv.store.DecrementCounter(key, body.Decrement)
 	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+type registerBody struct {
+	Value json.RawMessage `json:"value"`
+}
+
+func (srv *Server) getRegister(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	value, ok := srv.store.GetRegister(key)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	resp := registerBody{
+		Value: value,
+	}
+	e := json.NewEncoder(w)
+	err := e.Encode(resp)
+	if err != nil {
+		srv.logger.Error("failed to encode register value", "err", err)
+	}
+}
+
+func (srv *Server) putRegister(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if r.Body == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body registerBody
+	err = json.Unmarshal(b, &body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if body.Value == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	srv.store.SetRegister(key, body.Value)
 
 	w.WriteHeader(http.StatusOK)
 }

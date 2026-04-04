@@ -7,21 +7,29 @@ import (
 	"github.com/teleivo/commute/internal/crdt"
 )
 
-// Message is the gossip wire format: a snapshot of all counters keyed by name.
-type Message map[string]*crdt.PNCounter
+// Message is the gossip wire format: a snapshot of all CRDT state.
+type Message struct {
+	Counters  map[string]*crdt.PNCounter   `json:"counters"`
+	Registers map[string]*crdt.LWWRegister `json:"registers"`
+}
 
 // Store holds the CRDT state for all keys.
 type Store struct {
-	nodeID     crdt.NodeID
-	muCounters sync.RWMutex
-	counters   map[string]*crdt.PNCounter
+	nodeID      crdt.NodeID
+	clock       crdt.Clock
+	muCounters  sync.RWMutex
+	counters    map[string]*crdt.PNCounter
+	muRegisters sync.RWMutex
+	registers   map[string]*crdt.LWWRegister
 }
 
 // NewStore creates a Store for the given node.
-func NewStore(nodeID crdt.NodeID) *Store {
+func NewStore(nodeID crdt.NodeID, clock crdt.Clock) *Store {
 	return &Store{
-		nodeID:   nodeID,
-		counters: make(map[string]*crdt.PNCounter),
+		nodeID:    nodeID,
+		clock:     clock,
+		counters:  make(map[string]*crdt.PNCounter),
+		registers: make(map[string]*crdt.LWWRegister),
 	}
 }
 
@@ -62,24 +70,57 @@ func (st *Store) GetCounter(key string) (int64, bool) {
 	return value, true
 }
 
+// SetRegister writes a value to the register for key, creating it if it doesn't exist.
+func (st *Store) SetRegister(key string, value json.RawMessage) {
+	st.muRegisters.Lock()
+	register, ok := st.registers[key]
+	if !ok {
+		register = crdt.NewLWWRegister(st.nodeID, st.clock)
+		st.registers[key] = register
+	}
+	register.Set(value)
+	st.muRegisters.Unlock()
+}
+
+// GetRegister returns the value of the register for key, or false if it doesn't exist.
+func (st *Store) GetRegister(key string) (json.RawMessage, bool) {
+	st.muRegisters.RLock()
+	register, ok := st.registers[key]
+	if !ok {
+		st.muRegisters.RUnlock()
+		return nil, false
+	}
+	value := register.Value()
+	st.muRegisters.RUnlock()
+	return value, true
+}
+
 // Merge incorporates the state from a gossip message into the store.
 func (st *Store) Merge(msg Message) {
 	st.muCounters.Lock()
-	for k, counter := range msg {
-		if _, ok := st.counters[k]; ok {
-			st.counters[k].Merge(counter)
-		} else {
-			c := crdt.NewPNCounter(st.nodeID)
-			c.Merge(counter)
-			st.counters[k] = c
+	for k, incoming := range msg.Counters {
+		if _, ok := st.counters[k]; !ok {
+			st.counters[k] = crdt.NewPNCounter(st.nodeID)
 		}
+		st.counters[k].Merge(incoming)
 	}
 	st.muCounters.Unlock()
+
+	st.muRegisters.Lock()
+	for k, incoming := range msg.Registers {
+		if _, ok := st.registers[k]; !ok {
+			st.registers[k] = crdt.NewLWWRegister(st.nodeID, st.clock)
+		}
+		st.registers[k].Merge(incoming)
+	}
+	st.muRegisters.Unlock()
 }
 
-// MarshalCounters returns the JSON encoding of all counters.
-func (st *Store) MarshalCounters() ([]byte, error) {
+// MarshalState returns the JSON encoding of all CRDT state.
+func (st *Store) MarshalState() ([]byte, error) {
 	st.muCounters.RLock()
 	defer st.muCounters.RUnlock()
-	return json.Marshal(st.counters)
+	st.muRegisters.RLock()
+	defer st.muRegisters.RUnlock()
+	return json.Marshal(Message{Counters: st.counters, Registers: st.registers})
 }

@@ -5,10 +5,16 @@
 // [A comprehensive study of Convergent and Commutative Replicated Data Types]: https://inria.hal.science/inria-00555588/document
 package crdt
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // NodeID uniquely identifies a node in the cluster.
 type NodeID string
+
+// Clock returns the current time. It is used by LWWRegister to timestamp writes.
+type Clock func() time.Time
 
 // GCounter is a grow-only counter. Each node maintains its own counter that it alone increments.
 // The total value is the sum across all nodes. Merge takes the max of each node's counter,
@@ -138,4 +144,69 @@ func (pn *PNCounter) UnmarshalJSON(data []byte) error {
 	pn.inc = v.Inc
 	pn.dec = v.Dec
 	return nil
+}
+
+// LWWRegister is a last-writer-wins register. Each write is timestamped; merge picks the highest
+// timestamp. Equal timestamps are broken by node ID (lexicographically highest wins).
+//
+// The Shapiro paper specifies timestamps that are "consistent with causal order," suggesting a
+// logical clock. This implementation uses wall clock time, following Riak and Cassandra. Wall
+// clocks can drift between nodes, so a node with a fast clock may win over a causally later
+// write.
+type LWWRegister struct {
+	nodeID NodeID
+	clock  Clock
+	entry  lwwEntry
+}
+
+// lwwEntry is the timestamped value with writer identity. Merge compares these.
+type lwwEntry struct {
+	WriterID  NodeID          `json:"writerId"`
+	Timestamp time.Time       `json:"timestamp"`
+	Value     json.RawMessage `json:"value"`
+}
+
+func (e lwwEntry) After(other lwwEntry) bool {
+	return e.Timestamp.After(other.Timestamp) ||
+		(e.Timestamp.Equal(other.Timestamp) && e.WriterID > other.WriterID)
+}
+
+// NewLWWRegister creates a register owned by the given node using the provided clock.
+func NewLWWRegister(nodeID NodeID, clock Clock) *LWWRegister {
+	return &LWWRegister{
+		nodeID: nodeID,
+		clock:  clock,
+	}
+}
+
+// Value returns the current register value.
+func (lww *LWWRegister) Value() json.RawMessage {
+	return lww.entry.Value
+}
+
+// Merge incorporates the state of other, keeping the value with the higher timestamp.
+func (lww *LWWRegister) Merge(other *LWWRegister) {
+	if other.entry.After(lww.entry) {
+		lww.entry = other.entry
+	}
+}
+
+// Set writes a new value, timestamped by the register's clock.
+func (lww *LWWRegister) Set(value json.RawMessage) {
+	lww.entry = lwwEntry{
+		WriterID:  lww.nodeID,
+		Timestamp: lww.clock(),
+		Value:     value,
+	}
+}
+
+func (lww *LWWRegister) MarshalJSON() ([]byte, error) {
+	if lww == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(lww.entry)
+}
+
+func (lww *LWWRegister) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &lww.entry)
 }

@@ -37,7 +37,7 @@ func (c *cluster) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
-func newCluster(t *testing.T, n int) *cluster {
+func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 	t.Helper()
 
 	addrs := make([]string, n)
@@ -58,14 +58,18 @@ func newCluster(t *testing.T, n int) *cluster {
 				peers = append(peers, addrs[j])
 			}
 		}
-		srv, err := server.New(server.Config{
+		cfg := server.Config{
 			NodeID:         fmt.Sprintf("node-%d", i),
 			Peers:          strings.Join(peers, ","),
 			GossipInterval: 1 * time.Second,
 			Client:         client,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
 			Stderr:         io.Discard,
-		})
+		}
+		if i < len(clocks) {
+			cfg.Clock = clocks[i]
+		}
+		srv, err := server.New(cfg)
 		require.NoError(t, err)
 		c.nodes[i] = srv
 		c.routes[addrs[i]] = srv
@@ -116,7 +120,32 @@ func (c *cluster) getValue(node int, key string) int64 {
 	return int64(resp["value"].(float64))
 }
 
-func TestConvergence(t *testing.T) {
+func (c *cluster) setRegister(node int, key, value string) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"value": %q}`, value)
+	req := httptest.NewRequest(http.MethodPut, "/types/registers/keys/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) getRegister(node int, key string) string {
+	c.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/types/registers/keys/"+key, nil)
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		return ""
+	}
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	return resp["value"].(string)
+}
+
+func TestCounterConvergence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 3)
 		c.startGossip(t.Context())
@@ -158,7 +187,7 @@ func TestConvergence(t *testing.T) {
 	})
 }
 
-func TestConvergenceMultipleNodes(t *testing.T) {
+func TestCounterConvergenceMultipleNodes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 3)
 		c.startGossip(t.Context())
@@ -190,7 +219,7 @@ func TestConvergenceMultipleNodes(t *testing.T) {
 	})
 }
 
-func TestConvergenceIncrementReceivedKey(t *testing.T) {
+func TestCounterConvergenceIncrementReceivedKey(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 3)
 		c.startGossip(t.Context())
@@ -246,7 +275,7 @@ func TestConvergenceIncrementReceivedKey(t *testing.T) {
 	})
 }
 
-func TestConvergenceWithDecrement(t *testing.T) {
+func TestCounterConvergenceWithDecrement(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 3)
 		c.startGossip(t.Context())
@@ -274,5 +303,89 @@ func TestConvergenceWithDecrement(t *testing.T) {
 		assert.EqualValues(t, c.getValue(0, "score"), int64(-8))
 		assert.EqualValues(t, c.getValue(1, "score"), int64(-8))
 		assert.EqualValues(t, c.getValue(2, "score"), int64(-8))
+	})
+}
+
+func TestRegisterConvergence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Set on node 0, verify it propagates.
+		c.setRegister(0, "config", "v1")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getRegister(0, "config"), "v1")
+		assert.EqualValues(t, c.getRegister(1, "config"), "v1")
+		assert.EqualValues(t, c.getRegister(2, "config"), "v1")
+
+		// Overwrite on node 2, verify it propagates.
+		c.setRegister(2, "config", "v2")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getRegister(0, "config"), "v2")
+		assert.EqualValues(t, c.getRegister(1, "config"), "v2")
+		assert.EqualValues(t, c.getRegister(2, "config"), "v2")
+	})
+}
+
+func TestRegisterConvergenceLastWriterWins(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Each node gets a clock the test controls.
+		baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+		clocks := make([]func() time.Time, 3)
+		timestamps := make([]time.Time, 3)
+		for i := range 3 {
+			timestamps[i] = baseTime
+			i := i
+			clocks[i] = func() time.Time { return timestamps[i] }
+		}
+
+		c := newCluster(t, 3, clocks...)
+		c.startGossip(t.Context())
+
+		// Both nodes write concurrently. Node 1 writes at a later
+		// timestamp, so its value should win.
+		timestamps[0] = baseTime.Add(1 * time.Millisecond)
+		c.setRegister(0, "leader", "node-0")
+
+		timestamps[1] = baseTime.Add(2 * time.Millisecond)
+		c.setRegister(1, "leader", "node-1")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Node 1's write had the higher timestamp, so it wins.
+		assert.EqualValues(t, c.getRegister(0, "leader"), "node-1")
+		assert.EqualValues(t, c.getRegister(1, "leader"), "node-1")
+		assert.EqualValues(t, c.getRegister(2, "leader"), "node-1")
+	})
+}
+
+func TestRegisterConvergenceTiebreakByNodeID(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// All nodes write at the exact same timestamp. The node with
+		// the highest ID should win as a tiebreaker.
+		ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+		clock := func() time.Time { return ts }
+
+		c := newCluster(t, 3, clock, clock, clock)
+		c.startGossip(t.Context())
+
+		c.setRegister(0, "leader", "node-0")
+		c.setRegister(1, "leader", "node-1")
+		c.setRegister(2, "leader", "node-2")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// node-2 has the highest node ID, so it wins the tiebreak.
+		assert.EqualValues(t, c.getRegister(0, "leader"), "node-2")
+		assert.EqualValues(t, c.getRegister(1, "leader"), "node-2")
+		assert.EqualValues(t, c.getRegister(2, "leader"), "node-2")
 	})
 }

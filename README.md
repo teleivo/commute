@@ -8,6 +8,7 @@ Based on Shapiro et al.,
 ## Features
 
 * PN-Counter (increment and decrement)
+* LWW-Register (last-writer-wins, stores any JSON value)
 * Full-state gossip to a random peer on a configurable interval
 
 ## Run
@@ -34,6 +35,18 @@ Decrement:
 
 ```sh
 curl -X POST localhost:8080/types/counters/keys/visitors -d '{"decrement": 2}'
+```
+
+Set a register on node 0:
+
+```sh
+curl -X PUT localhost:8080/types/registers/keys/config -d '{"value": "dark-mode"}'
+```
+
+Read it from node 2:
+
+```sh
+curl localhost:8082/types/registers/keys/config
 ```
 
 ## Limitations
