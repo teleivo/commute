@@ -115,7 +115,6 @@ func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
 		NodeID:         "test-node",
-		Port:           "0",
 		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
 		Stderr:         io.Discard,

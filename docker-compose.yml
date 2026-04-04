@@ -1,0 +1,30 @@
+services:
+  node-0:
+    build: .
+    command: ["server", "-debug", "-nodeid", "node-0", "-addr", ":8080", "-peers", "node-1:8080,node-2:8080"]
+    ports:
+      - "8080:8080"
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+
+  node-1:
+    build: .
+    command: ["server", "-debug", "-nodeid", "node-1", "-addr", ":8080", "-peers", "node-0:8080,node-2:8080"]
+    ports:
+      - "8081:8080"
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+
+  node-2:
+    build: .
+    command: ["server", "-debug", "-nodeid", "node-2", "-addr", ":8080", "-peers", "node-0:8080,node-1:8080"]
+    ports:
+      - "8082:8080"
+    develop:
+      watch:
+        - action: rebuild
+          path: .

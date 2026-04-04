@@ -113,7 +113,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		_, _ = fmt.Fprintln(wErr, "flags:")
 		flags.PrintDefaults()
 	}
-	port := flags.String("port", "0", "HTTP server port (0 for a random available port)")
+	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
 	nodeID := flags.String("nodeid", "", "unique node identifier (required)")
 	peers := flags.String("peers", "", "comma-separated list of peer addresses (e.g. host1:7946,host2:7946)")
 	gossipInterval := flags.Duration("gossipinterval", 5*time.Second, "how often to push state to a random peer")
@@ -136,7 +136,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	err = profile(func() error {
 		srv, err := server.New(server.Config{
 			NodeID:         *nodeID,
-			Port:           *port,
+			Addr:           *addr,
 			Peers:          *peers,
 			GossipInterval: *gossipInterval,
 			Debug:          *debug,

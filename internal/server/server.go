@@ -12,7 +12,6 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -33,7 +32,7 @@ type Server struct {
 
 type Config struct {
 	NodeID         string
-	Port           string        // HTTP server port (use "0" for a random available port)
+	Addr           string        // listen address (e.g. ":8080", "0.0.0.0:8080")
 	Peers          string        // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
 	GossipInterval time.Duration // how often to push state to a random peer
 	Client         *http.Client  // HTTP client for gossip
@@ -46,9 +45,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.NodeID == "" {
 		return nil, errors.New("node ID is required")
 	}
-	addr, err := netip.ParseAddrPort("127.0.0.1:" + cfg.Port)
-	if err != nil {
-		return nil, fmt.Errorf("invalid port %q, must be in range 1-65535", cfg.Port)
+	addr := cfg.Addr
+	if addr == "" {
+		addr = ":0"
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return nil, fmt.Errorf("invalid addr %q: %s", addr, err)
 	}
 	if cfg.Peers == "" {
 		return nil, errors.New("at least one peer is required")
@@ -56,9 +58,12 @@ func New(cfg Config) (*Server, error) {
 	peers := make(map[string]struct{})
 	for _, p := range strings.Split(cfg.Peers, ",") {
 		p = strings.TrimSpace(p)
-		_, err := netip.ParseAddrPort(p)
+		host, port, err := net.SplitHostPort(p)
 		if err != nil {
 			return nil, fmt.Errorf("invalid peer %q: %s", p, err)
+		}
+		if host == "" || port == "" {
+			return nil, fmt.Errorf("invalid peer %q: host and port are required", p)
 		}
 		peers["http://"+p] = struct{}{}
 	}
@@ -73,7 +78,7 @@ func New(cfg Config) (*Server, error) {
 	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
 	handler := http.NewServeMux()
 	server := http.Server{
-		Addr:        addr.String(),
+		Addr:        addr,
 		Handler:     handler,
 		ReadTimeout: 3 * time.Second,
 		IdleTimeout: 120 * time.Second,
@@ -154,9 +159,10 @@ func (srv *Server) StartGossip(ctx context.Context) {
 			resp, err := srv.client.Do(req)
 			cancel()
 			if err != nil {
-				srv.logger.Warn("failed to gossip full state", "error", err)
+				srv.logger.Warn("failed to gossip full state", "peer", peer, "error", err)
 				continue
 			}
+			srv.logger.Debug("gossiped full state", "peer", peer)
 			_ = resp.Body.Close()
 		case <-ctx.Done():
 			return
@@ -220,7 +226,9 @@ func (st *Store) Merge(msg Message) {
 		if _, ok := st.counters[k]; ok {
 			st.counters[k].Merge(counter)
 		} else {
-			st.counters[k] = counter
+			c := crdt.NewGCounter(st.nodeID)
+			c.Merge(counter)
+			st.counters[k] = c
 		}
 	}
 	st.muCounters.Unlock()

@@ -60,7 +60,6 @@ func newCluster(t *testing.T, n int) *cluster {
 		}
 		srv, err := server.New(server.Config{
 			NodeID:         fmt.Sprintf("node-%d", i),
-			Port:           "0",
 			Peers:          strings.Join(peers, ","),
 			GossipInterval: 1 * time.Second,
 			Client:         client,
@@ -178,5 +177,61 @@ func TestConvergenceMultipleNodes(t *testing.T) {
 		assert.EqualValues(t, c.getValue(0, "shares"), uint64(4))
 		assert.EqualValues(t, c.getValue(1, "shares"), uint64(4))
 		assert.EqualValues(t, c.getValue(2, "shares"), uint64(4))
+	})
+}
+
+func TestConvergenceIncrementReceivedKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Node 0 increments a key.
+		c.increment(0, "visitors", 5)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Node 1 received the key via gossip and now increments it.
+		// This tests that a counter received via gossip retains the
+		// correct local nodeID so that the increment lands in node-1's
+		// slot, not an empty one.
+		c.increment(1, "visitors", 3)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(8))
+		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(8))
+		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(8))
+
+		// Node 0 also increments, testing a third round of gossip.
+		c.increment(0, "visitors", 2)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(10))
+		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(10))
+		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(10))
+
+		// Both node-1 and node-2 received "likes" via gossip from
+		// node-0. If their counters have an empty nodeID, both will
+		// write to counters[""] and merge will take max instead of
+		// sum, losing one node's increment.
+		c.increment(0, "likes", 10)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		c.increment(1, "likes", 3)
+		c.increment(2, "likes", 7)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Should be 10+3+7=20, not 10+max(3,7)=17.
+		assert.EqualValues(t, c.getValue(0, "likes"), uint64(20))
+		assert.EqualValues(t, c.getValue(1, "likes"), uint64(20))
+		assert.EqualValues(t, c.getValue(2, "likes"), uint64(20))
 	})
 }
