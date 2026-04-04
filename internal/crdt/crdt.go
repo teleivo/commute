@@ -5,10 +5,16 @@
 // [A comprehensive study of Convergent and Commutative Replicated Data Types]: https://inria.hal.science/inria-00555588/document
 package crdt
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // NodeID uniquely identifies a node in the cluster.
 type NodeID string
+
+// Clock returns the current time. It is used by LWWRegister to timestamp writes.
+type Clock func() time.Time
 
 // GCounter is a grow-only counter. Each node maintains its own counter that it alone increments.
 // The total value is the sum across all nodes. Merge takes the max of each node's counter,
@@ -137,5 +143,80 @@ func (pn *PNCounter) UnmarshalJSON(data []byte) error {
 	}
 	pn.inc = v.Inc
 	pn.dec = v.Dec
+	return nil
+}
+
+// LWWRegister is a last-writer-wins register. Each write is timestamped; merge picks the highest
+// timestamp. Equal timestamps are broken by node ID (highest wins).
+//
+// The Shapiro paper specifies timestamps that are "consistent with causal order," suggesting a
+// logical clock. This implementation uses wall clock time, following Riak and Cassandra. Wall
+// clocks can drift between nodes, so a node with a fast clock may win over a causally later
+// write.
+type LWWRegister struct {
+	clock  Clock
+	nodeID NodeID
+	t      time.Time
+	value  json.RawMessage
+}
+
+// NewLWWRegister creates a register owned by the given node using the provided clock.
+func NewLWWRegister(nodeID NodeID, clock Clock) *LWWRegister {
+	return &LWWRegister{
+		clock:  clock,
+		nodeID: nodeID,
+	}
+}
+
+// Value returns the current register value.
+func (lww *LWWRegister) Value() json.RawMessage {
+	return lww.value
+}
+
+// Merge incorporates the state of other, keeping the value with the higher timestamp.
+func (lww *LWWRegister) Merge(other *LWWRegister) {
+	if other.t.After(lww.t) || (other.t.Equal(lww.t) && other.nodeID > lww.nodeID) {
+		lww.t = other.t
+		lww.value = other.value
+		lww.nodeID = other.nodeID
+	}
+}
+
+// Set writes a new value, timestamped by the register's clock.
+func (lww *LWWRegister) Set(value json.RawMessage) {
+	lww.t = lww.clock()
+	lww.value = value
+}
+
+func (lww *LWWRegister) MarshalJSON() ([]byte, error) {
+	if lww == nil {
+		return []byte("null"), nil
+	}
+
+	v := struct {
+		NodeID NodeID          `json:"nodeId"`
+		T      time.Time       `json:"t"`
+		Value  json.RawMessage `json:"value"`
+	}{
+		NodeID: lww.nodeID,
+		T:      lww.t,
+		Value:  lww.value,
+	}
+	return json.Marshal(v)
+}
+
+func (lww *LWWRegister) UnmarshalJSON(data []byte) error {
+	var v struct {
+		NodeID NodeID          `json:"nodeId"`
+		T      time.Time       `json:"t"`
+		Value  json.RawMessage `json:"value"`
+	}
+	err := json.Unmarshal(data, &v)
+	if err != nil {
+		return err
+	}
+	lww.nodeID = v.NodeID
+	lww.t = v.T
+	lww.value = v.Value
 	return nil
 }

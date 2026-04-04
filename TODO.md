@@ -1,15 +1,18 @@
 # TODO
 
-* LWW-Register (inject Clock interface)
 * OR-Set (causal context, dotted version vectors)
 * CRDT Map (map[Key]CRDT, merge delegates per-key)
-* Property tests with `rapid` (commutativity, associativity, idempotency)
+* Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 
 ## Phase 3 — Observability
 
 * Prometheus metrics (gossip rounds, messages sent/received, convergence duration)
 * Grafana dashboard (per-node value time-series, converged/diverged state)
 * Debug endpoints (pause/resume gossip, inject/heal partitions, state dump, peers)
+
+## Optional
+
+* Replace wall clock with hybrid logical clock (HLC) for LWW-Register
 
 ## Phase 4 — Delta-state gossip
 
