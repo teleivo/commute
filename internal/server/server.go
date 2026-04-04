@@ -20,6 +20,7 @@ import (
 	"github.com/teleivo/commute/internal/crdt"
 )
 
+// Server is a CRDT key-value store node that serves an HTTP API and gossips state to peers.
 type Server struct {
 	logger         *slog.Logger
 	server         *http.Server
@@ -30,6 +31,7 @@ type Server struct {
 	rng            *rand.Rand
 }
 
+// Config holds the configuration for creating a Server.
 type Config struct {
 	NodeID         string
 	Addr           string        // listen address (e.g. ":8080", "0.0.0.0:8080")
@@ -41,6 +43,7 @@ type Config struct {
 	Stderr         io.Writer     // output for error logging
 }
 
+// New creates a Server with the given configuration.
 func New(cfg Config) (*Server, error) {
 	if cfg.NodeID == "" {
 		return nil, errors.New("node ID is required")
@@ -106,6 +109,7 @@ func New(cfg Config) (*Server, error) {
 	return srv, nil
 }
 
+// Start begins serving HTTP and gossiping state to peers. It blocks until the context is cancelled.
 func (srv *Server) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", srv.server.Addr)
 	if err != nil {
@@ -134,6 +138,8 @@ func (srv *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// StartGossip runs the gossip loop, periodically pushing full state to a random peer. It blocks
+// until the context is cancelled.
 func (srv *Server) StartGossip(ctx context.Context) {
 	t := time.NewTicker(srv.gossipInterval)
 	defer t.Stop()
@@ -181,69 +187,6 @@ type counterRequestBody struct {
 
 type counterResponseBody struct {
 	Value int64 `json:"value"`
-}
-
-type Message map[string]*crdt.PNCounter
-
-type Store struct {
-	nodeID     crdt.NodeID
-	muCounters sync.RWMutex
-	counters   map[string]*crdt.PNCounter
-}
-
-func NewStore(nodeID crdt.NodeID) *Store {
-	return &Store{
-		nodeID:   nodeID,
-		counters: make(map[string]*crdt.PNCounter),
-	}
-}
-
-func (st *Store) IncrementCounter(key string, value uint64) {
-	st.muCounters.Lock()
-	counter, ok := st.counters[key]
-	if !ok {
-		counter = crdt.NewPNCounter(st.nodeID)
-		st.counters[key] = counter
-	}
-	counter.Increment(value)
-	st.muCounters.Unlock()
-}
-
-func (st *Store) DecrementCounter(key string, value uint64) {
-	st.muCounters.Lock()
-	counter, ok := st.counters[key]
-	if !ok {
-		counter = crdt.NewPNCounter(st.nodeID)
-		st.counters[key] = counter
-	}
-	counter.Decrement(value)
-	st.muCounters.Unlock()
-}
-
-func (st *Store) GetCounter(key string) (int64, bool) {
-	st.muCounters.RLock()
-	counter, ok := st.counters[key]
-	if !ok {
-		st.muCounters.RUnlock()
-		return 0, false
-	}
-	value := counter.Value()
-	st.muCounters.RUnlock()
-	return value, true
-}
-
-func (st *Store) Merge(msg Message) {
-	st.muCounters.Lock()
-	for k, counter := range msg {
-		if _, ok := st.counters[k]; ok {
-			st.counters[k].Merge(counter)
-		} else {
-			c := crdt.NewPNCounter(st.nodeID)
-			c.Merge(counter)
-			st.counters[k] = c
-		}
-	}
-	st.muCounters.Unlock()
 }
 
 func (srv *Server) getCounters(w http.ResponseWriter, r *http.Request) {
