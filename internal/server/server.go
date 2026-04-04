@@ -148,9 +148,7 @@ func (srv *Server) StartGossip(ctx context.Context) {
 		select {
 		case <-t.C:
 			peer := srv.peers[srv.rng.IntN(len(srv.peers))]
-			srv.store.muCounters.RLock()
-			b, err := json.Marshal(srv.store.counters)
-			srv.store.muCounters.RUnlock()
+			b, err := srv.store.MarshalCounters()
 			if err != nil {
 				panic(err)
 			}

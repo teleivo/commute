@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/teleivo/commute/internal/crdt"
@@ -74,4 +75,11 @@ func (st *Store) Merge(msg Message) {
 		}
 	}
 	st.muCounters.Unlock()
+}
+
+// MarshalCounters returns the JSON encoding of all counters.
+func (st *Store) MarshalCounters() ([]byte, error) {
+	st.muCounters.RLock()
+	defer st.muCounters.RUnlock()
+	return json.Marshal(st.counters)
 }
