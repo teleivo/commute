@@ -38,16 +38,52 @@ func TestCounterAPI(t *testing.T) {
 			body:       `{"increment": 5}`,
 			wantStatus: http.StatusOK,
 		},
-		"IncrementMissingBody": {
+		"DecrementByOne": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{"decrement": 1}`,
+			wantStatus: http.StatusOK,
+		},
+		"DecrementByN": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{"decrement": 3}`,
+			wantStatus: http.StatusOK,
+		},
+		"MissingBody": {
 			method:     http.MethodPost,
 			path:       "/types/counters/keys/visitors",
 			body:       ``,
 			wantStatus: http.StatusBadRequest,
 		},
-		"IncrementInvalidJSON": {
+		"InvalidJSON": {
 			method:     http.MethodPost,
 			path:       "/types/counters/keys/visitors",
 			body:       `not json`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"BothIncrementAndDecrement": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{"increment": 5, "decrement": 3}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"IncrementZero": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{"increment": 0}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"DecrementZero": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{"decrement": 0}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"NeitherIncrementNorDecrement": {
+			method:     http.MethodPost,
+			path:       "/types/counters/keys/visitors",
+			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"MethodNotAllowed": {
@@ -90,6 +126,34 @@ func TestCounterIncrementAndFetch(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&got)
 	require.NoError(t, err)
 	assert.EqualValues(t, got["value"], any(float64(10)))
+}
+
+func TestCounterDecrementAndFetch(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/counters/keys/visitors", `{"increment": 10}`, http.StatusOK)
+	post(t, srv, "/types/counters/keys/visitors", `{"decrement": 3}`, http.StatusOK)
+
+	rec := get(t, srv, "/types/counters/keys/visitors", http.StatusOK)
+
+	var got map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&got)
+	require.NoError(t, err)
+	assert.EqualValues(t, got["value"], any(float64(7)))
+}
+
+func TestCounterDecrementBelowZero(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/counters/keys/visitors", `{"increment": 2}`, http.StatusOK)
+	post(t, srv, "/types/counters/keys/visitors", `{"decrement": 5}`, http.StatusOK)
+
+	rec := get(t, srv, "/types/counters/keys/visitors", http.StatusOK)
+
+	var got map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&got)
+	require.NoError(t, err)
+	assert.EqualValues(t, got["value"], any(float64(-3)))
 }
 
 func TestCounterSeparateKeys(t *testing.T) {

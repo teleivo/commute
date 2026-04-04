@@ -91,7 +91,17 @@ func (c *cluster) increment(node int, key string, value uint64) {
 	assert.EqualValues(c.t, rec.Code, http.StatusOK)
 }
 
-func (c *cluster) getValue(node int, key string) uint64 {
+func (c *cluster) decrement(node int, key string, value uint64) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"decrement": %d}`, value)
+	req := httptest.NewRequest(http.MethodPost, "/types/counters/keys/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) getValue(node int, key string) int64 {
 	c.t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/types/counters/keys/"+key, nil)
 	rec := httptest.NewRecorder()
@@ -103,7 +113,7 @@ func (c *cluster) getValue(node int, key string) uint64 {
 	var resp map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(c.t, err)
-	return uint64(resp["value"].(float64))
+	return int64(resp["value"].(float64))
 }
 
 func TestConvergence(t *testing.T) {
@@ -114,9 +124,9 @@ func TestConvergence(t *testing.T) {
 		c.increment(0, "visitors", 5)
 
 		// Before gossip, only node 0 has the value.
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(5))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(0))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(0))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(5))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(0))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(0))
 
 		// Each node picks one random peer per tick, so it may take up to
 		// n-1 rounds for all 3 nodes to converge.
@@ -124,9 +134,9 @@ func TestConvergence(t *testing.T) {
 		synctest.Wait()
 
 		// All nodes should now agree.
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(5))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(5))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(5))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(5))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(5))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(5))
 
 		// Increment again on node 0 to verify gossip is continuous.
 		c.increment(0, "visitors", 3)
@@ -134,17 +144,17 @@ func TestConvergence(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(8))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(8))
 
 		// Extra rounds should not change values (merge is idempotent).
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(8))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(8))
 	})
 }
 
@@ -166,17 +176,17 @@ func TestConvergenceMultipleNodes(t *testing.T) {
 		synctest.Wait()
 
 		// All nodes should converge to 3+7+2=12.
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(12))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(12))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(12))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(12))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(12))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(12))
 
 		// Keys from other nodes should have propagated.
-		assert.EqualValues(t, c.getValue(0, "likes"), uint64(10))
-		assert.EqualValues(t, c.getValue(1, "likes"), uint64(10))
-		assert.EqualValues(t, c.getValue(2, "likes"), uint64(10))
-		assert.EqualValues(t, c.getValue(0, "shares"), uint64(4))
-		assert.EqualValues(t, c.getValue(1, "shares"), uint64(4))
-		assert.EqualValues(t, c.getValue(2, "shares"), uint64(4))
+		assert.EqualValues(t, c.getValue(0, "likes"), int64(10))
+		assert.EqualValues(t, c.getValue(1, "likes"), int64(10))
+		assert.EqualValues(t, c.getValue(2, "likes"), int64(10))
+		assert.EqualValues(t, c.getValue(0, "shares"), int64(4))
+		assert.EqualValues(t, c.getValue(1, "shares"), int64(4))
+		assert.EqualValues(t, c.getValue(2, "shares"), int64(4))
 	})
 }
 
@@ -200,9 +210,9 @@ func TestConvergenceIncrementReceivedKey(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(8))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(8))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(8))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(8))
 
 		// Node 0 also increments, testing a third round of gossip.
 		c.increment(0, "visitors", 2)
@@ -210,9 +220,9 @@ func TestConvergenceIncrementReceivedKey(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.getValue(0, "visitors"), uint64(10))
-		assert.EqualValues(t, c.getValue(1, "visitors"), uint64(10))
-		assert.EqualValues(t, c.getValue(2, "visitors"), uint64(10))
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(10))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(10))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(10))
 
 		// Both node-1 and node-2 received "likes" via gossip from
 		// node-0. If their counters have an empty nodeID, both will
@@ -230,8 +240,39 @@ func TestConvergenceIncrementReceivedKey(t *testing.T) {
 		synctest.Wait()
 
 		// Should be 10+3+7=20, not 10+max(3,7)=17.
-		assert.EqualValues(t, c.getValue(0, "likes"), uint64(20))
-		assert.EqualValues(t, c.getValue(1, "likes"), uint64(20))
-		assert.EqualValues(t, c.getValue(2, "likes"), uint64(20))
+		assert.EqualValues(t, c.getValue(0, "likes"), int64(20))
+		assert.EqualValues(t, c.getValue(1, "likes"), int64(20))
+		assert.EqualValues(t, c.getValue(2, "likes"), int64(20))
+	})
+}
+
+func TestConvergenceWithDecrement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Increment and decrement on different nodes.
+		c.increment(0, "score", 10)
+		c.decrement(1, "score", 3)
+		c.increment(2, "score", 5)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes should converge to 10-3+5=12.
+		assert.EqualValues(t, c.getValue(0, "score"), int64(12))
+		assert.EqualValues(t, c.getValue(1, "score"), int64(12))
+		assert.EqualValues(t, c.getValue(2, "score"), int64(12))
+
+		// Decrement below zero.
+		c.decrement(0, "score", 20)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes should converge to 12-20=-8.
+		assert.EqualValues(t, c.getValue(0, "score"), int64(-8))
+		assert.EqualValues(t, c.getValue(1, "score"), int64(-8))
+		assert.EqualValues(t, c.getValue(2, "score"), int64(-8))
 	})
 }

@@ -1,6 +1,5 @@
 # TODO
 
-* PN-Counter
 * LWW-Register (inject Clock interface)
 * OR-Set (causal context, dotted version vectors)
 * CRDT Map (map[Key]CRDT, merge delegates per-key)

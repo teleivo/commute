@@ -176,24 +176,25 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type counterRequestBody struct {
 	Increment uint64 `json:"increment"`
+	Decrement uint64 `json:"decrement"`
 }
 
 type counterResponseBody struct {
-	Value uint64 `json:"value"`
+	Value int64 `json:"value"`
 }
 
-type Message map[string]*crdt.GCounter
+type Message map[string]*crdt.PNCounter
 
 type Store struct {
 	nodeID     crdt.NodeID
 	muCounters sync.RWMutex
-	counters   map[string]*crdt.GCounter
+	counters   map[string]*crdt.PNCounter
 }
 
 func NewStore(nodeID crdt.NodeID) *Store {
 	return &Store{
 		nodeID:   nodeID,
-		counters: make(map[string]*crdt.GCounter),
+		counters: make(map[string]*crdt.PNCounter),
 	}
 }
 
@@ -201,14 +202,25 @@ func (st *Store) IncrementCounter(key string, value uint64) {
 	st.muCounters.Lock()
 	counter, ok := st.counters[key]
 	if !ok {
-		counter = crdt.NewGCounter(st.nodeID)
+		counter = crdt.NewPNCounter(st.nodeID)
 		st.counters[key] = counter
 	}
 	counter.Increment(value)
 	st.muCounters.Unlock()
 }
 
-func (st *Store) GetCounter(key string) (uint64, bool) {
+func (st *Store) DecrementCounter(key string, value uint64) {
+	st.muCounters.Lock()
+	counter, ok := st.counters[key]
+	if !ok {
+		counter = crdt.NewPNCounter(st.nodeID)
+		st.counters[key] = counter
+	}
+	counter.Decrement(value)
+	st.muCounters.Unlock()
+}
+
+func (st *Store) GetCounter(key string) (int64, bool) {
 	st.muCounters.RLock()
 	counter, ok := st.counters[key]
 	if !ok {
@@ -226,7 +238,7 @@ func (st *Store) Merge(msg Message) {
 		if _, ok := st.counters[k]; ok {
 			st.counters[k].Merge(counter)
 		} else {
-			c := crdt.NewGCounter(st.nodeID)
+			c := crdt.NewPNCounter(st.nodeID)
 			c.Merge(counter)
 			st.counters[k] = c
 		}
@@ -279,7 +291,15 @@ func (srv *Server) postCounters(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	srv.store.IncrementCounter(key, body.Increment)
+	if (body.Increment > 0 && body.Decrement > 0) || (body.Increment == 0 && body.Decrement == 0) {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if body.Increment > 0 {
+		srv.store.IncrementCounter(key, body.Increment)
+	} else {
+		srv.store.DecrementCounter(key, body.Decrement)
+	}
 
 	w.WriteHeader(http.StatusOK)
 }

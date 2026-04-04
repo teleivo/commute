@@ -74,3 +74,68 @@ func (g *GCounter) UnmarshalJSON(data []byte) error {
 	g.counters = v.Counters
 	return nil
 }
+
+// PNCounter is a positive-negative counter that supports both increment and decrement. The value
+// is the total increments minus the total decrements across all nodes.
+type PNCounter struct {
+	inc *GCounter
+	dec *GCounter
+}
+
+// NewPNCounter creates a PNCounter owned by the given node.
+func NewPNCounter(nodeID NodeID) *PNCounter {
+	return &PNCounter{
+		inc: NewGCounter(nodeID),
+		dec: NewGCounter(nodeID),
+	}
+}
+
+// Value returns the counter total: increments minus decrements across all nodes.
+func (pn *PNCounter) Value() int64 {
+	return int64(pn.inc.Value()) - int64(pn.dec.Value())
+}
+
+// Merge incorporates the state of other into pn.
+func (pn *PNCounter) Merge(other *PNCounter) {
+	pn.inc.Merge(other.inc)
+	pn.dec.Merge(other.dec)
+}
+
+// Increment adds n to this node's positive counter.
+func (pn *PNCounter) Increment(n uint64) {
+	pn.inc.Increment(n)
+}
+
+// Decrement adds n to this node's negative counter.
+func (pn *PNCounter) Decrement(n uint64) {
+	pn.dec.Increment(n)
+}
+
+func (pn *PNCounter) MarshalJSON() ([]byte, error) {
+	if pn == nil {
+		return []byte("null"), nil
+	}
+
+	v := struct {
+		Inc *GCounter `json:"inc"`
+		Dec *GCounter `json:"dec"`
+	}{
+		Inc: pn.inc,
+		Dec: pn.dec,
+	}
+	return json.Marshal(v)
+}
+
+func (pn *PNCounter) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Inc *GCounter `json:"inc"`
+		Dec *GCounter `json:"dec"`
+	}
+	err := json.Unmarshal(data, &v)
+	if err != nil {
+		return err
+	}
+	pn.inc = v.Inc
+	pn.dec = v.Dec
+	return nil
+}
