@@ -112,6 +112,8 @@ func New(cfg Config) (*Server, error) {
 	handler.HandleFunc("POST /types/counters/keys/{key}", srv.postCounters)
 	handler.HandleFunc("GET /types/registers/keys/{key}", srv.getRegister)
 	handler.HandleFunc("PUT /types/registers/keys/{key}", srv.putRegister)
+	handler.HandleFunc("GET /types/sets/keys/{key}", srv.getSet)
+	handler.HandleFunc("POST /types/sets/keys/{key}", srv.postSet)
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	return srv, nil
 }
@@ -306,6 +308,77 @@ func (srv *Server) putRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srv.store.SetRegister(key, body.Value)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+type setRequestBody struct {
+	Add    string `json:"add"`
+	Remove string `json:"remove"`
+}
+
+type setResponseBody struct {
+	Value []string `json:"value"`
+}
+
+func (srv *Server) getSet(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	value, ok := srv.store.GetSet(key)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if value == nil {
+		value = []string{}
+	}
+	resp := setResponseBody{
+		Value: value,
+	}
+	e := json.NewEncoder(w)
+	err := e.Encode(resp)
+	if err != nil {
+		srv.logger.Error("failed to encode set value", "err", err)
+	}
+}
+
+func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if r.Body == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body setRequestBody
+	err = json.Unmarshal(b, &body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if body.Add == "" && body.Remove == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if body.Remove != "" {
+		srv.store.RemoveSet(key, body.Remove)
+	}
+	if body.Add != "" {
+		srv.store.AddSet(key, body.Add)
+	}
 
 	w.WriteHeader(http.StatusOK)
 }

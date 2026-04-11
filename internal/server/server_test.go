@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,199 @@ func TestRegisterSeparateKeys(t *testing.T) {
 	assert.EqualValues(t, gotB["value"], "beta")
 }
 
+func TestSetAPI(t *testing.T) {
+	tests := map[string]struct {
+		method     string
+		path       string
+		body       string
+		wantStatus int
+	}{
+		"FetchNonExistent": {
+			method:     http.MethodGet,
+			path:       "/types/sets/keys/fruits",
+			wantStatus: http.StatusNotFound,
+		},
+		"AddString": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{"add": "apple"}`,
+			wantStatus: http.StatusOK,
+		},
+		"RemoveString": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{"remove": "apple"}`,
+			wantStatus: http.StatusOK,
+		},
+		"MissingBody": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       ``,
+			wantStatus: http.StatusBadRequest,
+		},
+		"InvalidJSON": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `not json`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"NeitherAddNorRemove": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"BothAddAndRemove": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{"add": "apple", "remove": "banana"}`,
+			wantStatus: http.StatusOK,
+		},
+		"AddEmptyStringRejected": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{"add": ""}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"RemoveEmptyStringRejected": {
+			method:     http.MethodPost,
+			path:       "/types/sets/keys/fruits",
+			body:       `{"remove": ""}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		"MethodNotAllowed": {
+			method:     http.MethodDelete,
+			path:       "/types/sets/keys/fruits",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := newTestServer(t)
+
+			var req *http.Request
+			if tc.body != "" {
+				req = httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(tc.method, tc.path, nil)
+			}
+			rec := httptest.NewRecorder()
+
+			srv.ServeHTTP(rec, req)
+
+			assert.EqualValues(t, rec.Code, tc.wantStatus)
+		})
+	}
+}
+
+func TestSetAddAndFetch(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+
+	resp := getSet(t, srv, "fruits")
+
+	slices.Sort(resp.Value)
+	assert.EqualValues(t, resp.Value, []string{"apple", "banana"})
+}
+
+func TestSetAddDuplicate(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+
+	resp := getSet(t, srv, "fruits")
+
+	assert.EqualValues(t, resp.Value, []string{"apple"})
+}
+
+func TestSetRemove(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"remove": "apple"}`, http.StatusOK)
+
+	resp := getSet(t, srv, "fruits")
+	assert.EqualValues(t, resp.Value, []string{"banana"})
+}
+
+func TestSetRemoveAllElements(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"remove": "apple"}`, http.StatusOK)
+
+	// Set exists but is empty.
+	rec := get(t, srv, "/types/sets/keys/fruits", http.StatusOK)
+	var got setResponse
+	err := json.NewDecoder(rec.Body).Decode(&got)
+	require.NoError(t, err)
+	assert.EqualValues(t, got.Value, []string{})
+}
+
+func TestSetRemoveNonExistentElement(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+
+	// Remove an element that doesn't exist in the set.
+	post(t, srv, "/types/sets/keys/fruits", `{"remove": "cherry"}`, http.StatusOK)
+
+	// The set should still contain apple.
+	resp := getSet(t, srv, "fruits")
+	assert.EqualValues(t, resp.Value, []string{"apple"})
+}
+
+func TestSetAddAndRemoveDifferentElements(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+
+	// Remove banana and add cherry in one request.
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "cherry", "remove": "banana"}`, http.StatusOK)
+
+	resp := getSet(t, srv, "fruits")
+
+	slices.Sort(resp.Value)
+	assert.EqualValues(t, resp.Value, []string{"apple", "cherry"})
+}
+
+func TestSetAddAndRemoveSameElement(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+
+	// Remove and re-add apple in one request. Remove is applied
+	// first, then add, so apple should be present with a fresh tag.
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple", "remove": "apple"}`, http.StatusOK)
+
+	resp := getSet(t, srv, "fruits")
+
+	assert.EqualValues(t, resp.Value, []string{"apple"})
+}
+
+func TestSetSeparateKeys(t *testing.T) {
+	srv := newTestServer(t)
+
+	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/types/sets/keys/colors", `{"add": "red"}`, http.StatusOK)
+
+	respFruits := getSet(t, srv, "fruits")
+	assert.EqualValues(t, respFruits.Value, []string{"apple"})
+
+	respColors := getSet(t, srv, "colors")
+	assert.EqualValues(t, respColors.Value, []string{"red"})
+}
+
 func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
@@ -336,4 +530,17 @@ func get(t *testing.T, h *server.Server, path string, wantStatus int) *httptest.
 	h.ServeHTTP(rec, req)
 	assert.EqualValues(t, rec.Code, wantStatus)
 	return rec
+}
+
+type setResponse struct {
+	Value []string `json:"value"`
+}
+
+func getSet(t *testing.T, h *server.Server, key string) setResponse {
+	t.Helper()
+	rec := get(t, h, "/types/sets/keys/"+key, http.StatusOK)
+	var resp setResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	return resp
 }

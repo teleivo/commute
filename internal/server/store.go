@@ -11,6 +11,7 @@ import (
 type Message struct {
 	Counters  map[string]*crdt.PNCounter   `json:"counters"`
 	Registers map[string]*crdt.LWWRegister `json:"registers"`
+	Sets      map[string]*crdt.ORSet       `json:"sets"`
 }
 
 // Store holds the CRDT state for all keys.
@@ -21,6 +22,8 @@ type Store struct {
 	counters    map[string]*crdt.PNCounter
 	muRegisters sync.RWMutex
 	registers   map[string]*crdt.LWWRegister
+	muSets      sync.RWMutex
+	sets        map[string]*crdt.ORSet
 }
 
 // NewStore creates a Store for the given node.
@@ -30,6 +33,7 @@ func NewStore(nodeID crdt.NodeID, clock crdt.Clock) *Store {
 		clock:     clock,
 		counters:  make(map[string]*crdt.PNCounter),
 		registers: make(map[string]*crdt.LWWRegister),
+		sets:      make(map[string]*crdt.ORSet),
 	}
 }
 
@@ -95,6 +99,43 @@ func (st *Store) GetRegister(key string) (json.RawMessage, bool) {
 	return value, true
 }
 
+// GetSet returns the values of the set for key, or false if it doesn't exist.
+func (st *Store) GetSet(key string) ([]string, bool) {
+	st.muSets.RLock()
+	set, ok := st.sets[key]
+	if !ok {
+		st.muSets.RUnlock()
+		return nil, false
+	}
+	value := set.Values()
+	st.muSets.RUnlock()
+	return value, true
+}
+
+// AddSet adds a value to the set for key, creating it if it doesn't exist.
+func (st *Store) AddSet(key, value string) {
+	st.muSets.Lock()
+	set, ok := st.sets[key]
+	if !ok {
+		set = crdt.NewORSet()
+		st.sets[key] = set
+	}
+	set.Add(value)
+	st.muSets.Unlock()
+}
+
+// RemoveSet removes a value from the set for key, creating it if it doesn't exist.
+func (st *Store) RemoveSet(key, value string) {
+	st.muSets.Lock()
+	set, ok := st.sets[key]
+	if !ok {
+		set = crdt.NewORSet()
+		st.sets[key] = set
+	}
+	set.Remove(value)
+	st.muSets.Unlock()
+}
+
 // Merge incorporates the state from a gossip message into the store.
 func (st *Store) Merge(msg Message) {
 	st.muCounters.Lock()
@@ -114,6 +155,15 @@ func (st *Store) Merge(msg Message) {
 		st.registers[k].Merge(incoming)
 	}
 	st.muRegisters.Unlock()
+
+	st.muSets.Lock()
+	for k, incoming := range msg.Sets {
+		if _, ok := st.sets[k]; !ok {
+			st.sets[k] = crdt.NewORSet()
+		}
+		st.sets[k].Merge(incoming)
+	}
+	st.muSets.Unlock()
 }
 
 // MarshalState returns the JSON encoding of all CRDT state.
@@ -122,5 +172,11 @@ func (st *Store) MarshalState() ([]byte, error) {
 	defer st.muCounters.RUnlock()
 	st.muRegisters.RLock()
 	defer st.muRegisters.RUnlock()
-	return json.Marshal(Message{Counters: st.counters, Registers: st.registers})
+	st.muSets.RLock()
+	defer st.muSets.RUnlock()
+	return json.Marshal(Message{
+		Counters:  st.counters,
+		Registers: st.registers,
+		Sets:      st.sets,
+	})
 }

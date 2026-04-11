@@ -45,10 +45,12 @@ func TestGCounterIncrement(t *testing.T) {
 	g := NewGCounter("a")
 
 	g.Increment(1)
+
 	assert.EqualValues(t, g.Value(), uint64(1))
 
 	g.Increment(1)
 	g.Increment(5)
+
 	assert.EqualValues(t, g.Value(), uint64(7))
 }
 

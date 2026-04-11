@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -118,6 +119,44 @@ func (c *cluster) getValue(node int, key string) int64 {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(c.t, err)
 	return int64(resp["value"].(float64))
+}
+
+func (c *cluster) addToSet(node int, key, value string) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"add": %q}`, value)
+	req := httptest.NewRequest(http.MethodPost, "/types/sets/keys/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) getSetValues(node int, key string) []string {
+	c.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/types/sets/keys/"+key, nil)
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		return nil
+	}
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp struct {
+		Value []string `json:"value"`
+	}
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	slices.Sort(resp.Value)
+	return resp.Value
+}
+
+func (c *cluster) removeFromSet(node int, key, value string) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"remove": %q}`, value)
+	req := httptest.NewRequest(http.MethodPost, "/types/sets/keys/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
 }
 
 func (c *cluster) setRegister(node int, key, value string) {
@@ -387,5 +426,146 @@ func TestRegisterConvergenceTiebreakByNodeID(t *testing.T) {
 		assert.EqualValues(t, c.getRegister(0, "leader"), "node-2")
 		assert.EqualValues(t, c.getRegister(1, "leader"), "node-2")
 		assert.EqualValues(t, c.getRegister(2, "leader"), "node-2")
+	})
+}
+
+func TestSetConvergence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		c.addToSet(0, "fruits", "apple")
+
+		// Before gossip, only node 0 has the value.
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), []string{"apple"})
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string(nil))
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string(nil))
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes should now agree.
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), []string{"apple"})
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string{"apple"})
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string{"apple"})
+	})
+}
+
+func TestSetConvergenceMultipleNodes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Add different elements on different nodes.
+		c.addToSet(0, "fruits", "apple")
+		c.addToSet(1, "fruits", "banana")
+		c.addToSet(2, "fruits", "cherry")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		want := []string{"apple", "banana", "cherry"}
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), want)
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), want)
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), want)
+	})
+}
+
+func TestSetConvergenceRemove(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		c.addToSet(0, "fruits", "apple")
+		c.addToSet(0, "fruits", "banana")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes have both elements. Remove apple from node 1.
+		c.removeFromSet(1, "fruits", "apple")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes should converge to just banana.
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), []string{"banana"})
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string{"banana"})
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string{"banana"})
+	})
+}
+
+func TestSetConvergenceConcurrentAddRemove(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Add apple on node 0.
+		c.addToSet(0, "fruits", "apple")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Node 1 removes apple.
+		c.removeFromSet(1, "fruits", "apple")
+
+		// Concurrently, node 2 re-adds apple. This add is concurrent
+		// with the remove (node 2 has not seen the remove yet), so the
+		// add should win per OR-Set semantics.
+		c.addToSet(2, "fruits", "apple")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// The concurrent add wins: apple should be in the set.
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), []string{"apple"})
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string{"apple"})
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string{"apple"})
+	})
+}
+
+// TestSetConvergenceRemoveOverRemovesWithoutContext documents a known
+// limitation of server-side remove without client-side causal context.
+//
+// When a remove is issued on a node that has received new dots via
+// gossip since the client's last read, those unseen dots are also
+// removed. With client-side context (as in Riak), only the dots the
+// client observed would be removed and the concurrent add would
+// survive. This test should be updated to assert the correct OR-Set
+// behavior once client-side causal context is implemented.
+func TestSetConvergenceRemoveOverRemovesWithoutContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		// Node 0 adds apple.
+		c.addToSet(0, "fruits", "apple")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// All nodes have apple. Node 2 concurrently re-adds apple
+		// (generating a new unique tag).
+		c.addToSet(2, "fruits", "apple")
+
+		// Gossip delivers node 2's new tag to node 1.
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Node 1 removes apple. Because there is no client-side
+		// context, the server removes all dots it currently has,
+		// including the new tag from node 2 that the client never
+		// observed.
+		c.removeFromSet(1, "fruits", "apple")
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		// Without client-side context, the concurrent add from node
+		// 2 is lost. With proper causal context this should be
+		// []string{"apple"} instead.
+		assert.EqualValues(t, c.getSetValues(0, "fruits"), []string{})
+		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string{})
+		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string{})
 	})
 }

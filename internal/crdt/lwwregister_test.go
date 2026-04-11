@@ -11,12 +11,15 @@ import (
 func TestLWWRegisterValue(t *testing.T) {
 	t.Run("Empty", func(t *testing.T) {
 		r := NewLWWRegister("a", time.Now)
+
 		assert.EqualValues(t, r.Value(), json.RawMessage(nil))
 	})
 
 	t.Run("AfterSet", func(t *testing.T) {
 		r := NewLWWRegister("a", time.Now)
+
 		r.Set(json.RawMessage(`"hello"`))
+
 		assert.EqualValues(t, string(r.Value()), `"hello"`)
 	})
 
@@ -26,8 +29,10 @@ func TestLWWRegisterValue(t *testing.T) {
 			ts = ts.Add(1 * time.Second)
 			return ts
 		})
+
 		r.Set(json.RawMessage(`"first"`))
 		r.Set(json.RawMessage(`"second"`))
+
 		assert.EqualValues(t, string(r.Value()), `"second"`)
 	})
 }
@@ -39,11 +44,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
 		a.Set(json.RawMessage(`"old"`))
-
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
 		b.Set(json.RawMessage(`"new"`))
 
 		a.Merge(b)
+
 		assert.EqualValues(t, string(a.Value()), `"new"`)
 	})
 
@@ -51,50 +56,48 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(2*time.Second)))
 		a.Set(json.RawMessage(`"winner"`))
-
 		b := NewLWWRegister("b", fixedClock(base.Add(1*time.Second)))
 		b.Set(json.RawMessage(`"loser"`))
 
 		a.Merge(b)
+
 		assert.EqualValues(t, string(a.Value()), `"winner"`)
 	})
 
 	t.Run("TiebreakByNodeID", func(t *testing.T) {
 		t.Parallel()
 		clock := fixedClock(base)
-
 		a := NewLWWRegister("a", clock)
 		a.Set(json.RawMessage(`"from-a"`))
-
 		b := NewLWWRegister("b", clock)
 		b.Set(json.RawMessage(`"from-b"`))
 
 		a.Merge(b)
+
 		assert.EqualValues(t, string(a.Value()), `"from-b"`)
 	})
 
 	t.Run("TiebreakLowerNodeIDLoses", func(t *testing.T) {
 		t.Parallel()
 		clock := fixedClock(base)
-
 		a := NewLWWRegister("z", clock)
 		a.Set(json.RawMessage(`"from-z"`))
-
 		b := NewLWWRegister("a", clock)
 		b.Set(json.RawMessage(`"from-a"`))
 
 		a.Merge(b)
+
 		assert.EqualValues(t, string(a.Value()), `"from-z"`)
 	})
 
 	t.Run("MergeIntoEmpty", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base))
-
 		b := NewLWWRegister("b", fixedClock(base))
 		b.Set(json.RawMessage(`"hello"`))
 
 		a.Merge(b)
+
 		assert.EqualValues(t, string(a.Value()), `"hello"`)
 	})
 
@@ -104,6 +107,7 @@ func TestLWWRegisterMerge(t *testing.T) {
 		a.Set(json.RawMessage(`"hello"`))
 
 		a.Merge(a)
+
 		assert.EqualValues(t, string(a.Value()), `"hello"`)
 	})
 
@@ -111,7 +115,6 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
 		a.Set(json.RawMessage(`"from-a"`))
-
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
 		b.Set(json.RawMessage(`"from-b"`))
 
@@ -166,12 +169,12 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
 		a.Set(json.RawMessage(`"hello"`))
-
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
 		b.Set(json.RawMessage(`"world"`))
 
 		a.Merge(b)
 		first := string(a.Value())
+
 		a.Merge(b)
 		second := string(a.Value())
 

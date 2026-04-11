@@ -6,8 +6,12 @@
 package crdt
 
 import (
+	"bytes"
 	"encoding/json"
+	"slices"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // NodeID uniquely identifies a node in the cluster.
@@ -209,4 +213,135 @@ func (lww *LWWRegister) MarshalJSON() ([]byte, error) {
 
 func (lww *LWWRegister) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &lww.entry)
+}
+
+// ORSet is an observed-remove set. Each Add generates a globally unique tag (UUID); Remove captures
+// all tags currently associated with an element. An element is in the set if any of its tags have
+// not been removed. This means a concurrent Add and Remove of the same element results in the Add
+// winning, because the new tag was not observed by the Remove.
+//
+// The payload is a pair of maps (add, remove) from element to a list of unique tags, following
+// Shapiro et al. Specification 15. Merge takes the union of both maps, deduplicating tags.
+type ORSet struct {
+	add    map[string][]uuid.UUID
+	remove map[string][]uuid.UUID
+}
+
+// NewORSet creates an empty OR-Set.
+func NewORSet() *ORSet {
+	return &ORSet{
+		add:    make(map[string][]uuid.UUID),
+		remove: make(map[string][]uuid.UUID),
+	}
+}
+
+// Contains returns true if the element is in the set, i.e. it has at least one tag that has not
+// been removed.
+func (or *ORSet) Contains(value string) bool {
+	add, added := or.add[value]
+	if !added {
+		return false
+	}
+	remove, removed := or.remove[value]
+	if !removed {
+		return true
+	}
+	for _, v := range add {
+		if !slices.Contains(remove, v) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Values returns all elements currently in the set, i.e. elements that have at least one tag that
+// has not been removed. The order of the returned slice is not guaranteed.
+func (or *ORSet) Values() []string {
+	var values []string
+	for value := range or.add {
+		if or.Contains(value) {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+// Add inserts an element into the set with a fresh unique tag.
+func (or *ORSet) Add(value string) {
+	id := uuid.New()
+	add, ok := or.add[value]
+	if ok {
+		add = append(add, id)
+	} else {
+		add = []uuid.UUID{id}
+	}
+	or.add[value] = add
+}
+
+// Remove removes an element by capturing all of its currently observed tags.
+func (or *ORSet) Remove(value string) {
+	add, added := or.add[value]
+	if !added {
+		// TODO in U-set its a precondition that it has been added but not in OR-set is it? or still
+		// because remove does not generate an id so
+		return
+	}
+	or.remove[value] = slices.Concat(or.remove[value], add)
+	or.add[value] = []uuid.UUID{}
+}
+
+// Merge incorporates the state of other into or by taking the union of the add and remove maps,
+// deduplicating tags.
+func (or *ORSet) Merge(other *ORSet) {
+	for k, v := range other.add {
+		if _, ok := or.add[k]; !ok {
+			or.add[k] = v
+		} else {
+			or.add[k] = slices.Concat(or.add[k], v)
+			slices.SortFunc(or.add[k], func(a, b uuid.UUID) int {
+				return bytes.Compare(a[:], b[:])
+			})
+			or.add[k] = slices.Compact(or.add[k])
+		}
+	}
+	for k, v := range other.remove {
+		if _, ok := or.remove[k]; !ok {
+			or.remove[k] = v
+		} else {
+			or.remove[k] = slices.Concat(or.remove[k], v)
+			slices.SortFunc(or.remove[k], func(a, b uuid.UUID) int {
+				return bytes.Compare(a[:], b[:])
+			})
+			or.remove[k] = slices.Compact(or.remove[k])
+		}
+	}
+}
+
+func (or *ORSet) MarshalJSON() ([]byte, error) {
+	if or == nil {
+		return []byte("null"), nil
+	}
+	v := struct {
+		Add    map[string][]uuid.UUID `json:"add"`
+		Remove map[string][]uuid.UUID `json:"remove"`
+	}{
+		Add:    or.add,
+		Remove: or.remove,
+	}
+	return json.Marshal(v)
+}
+
+func (or *ORSet) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Add    map[string][]uuid.UUID `json:"add"`
+		Remove map[string][]uuid.UUID `json:"remove"`
+	}
+	err := json.Unmarshal(data, &v)
+	if err != nil {
+		return err
+	}
+	or.add = v.Add
+	or.remove = v.Remove
+	return nil
 }

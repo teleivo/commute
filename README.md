@@ -9,6 +9,7 @@ Based on Shapiro et al.,
 
 * PN-Counter (increment and decrement)
 * LWW-Register (last-writer-wins, stores any JSON value)
+* OR-Set (observed-remove set, stores unique strings)
 * Full-state gossip to a random peer on a configurable interval
 
 ## Run
@@ -47,6 +48,25 @@ Read it from node 2:
 
 ```sh
 curl localhost:8082/types/registers/keys/config
+```
+
+Add to a set on node 0:
+
+```sh
+curl -X POST localhost:8080/types/sets/keys/fruits -d '{"add": "apple"}'
+curl -X POST localhost:8080/types/sets/keys/fruits -d '{"add": "banana"}'
+```
+
+Read the set from node 1:
+
+```sh
+curl localhost:8081/types/sets/keys/fruits
+```
+
+Remove from the set:
+
+```sh
+curl -X POST localhost:8080/types/sets/keys/fruits -d '{"remove": "apple"}'
 ```
 
 ## Limitations
