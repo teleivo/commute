@@ -108,12 +108,12 @@ func New(cfg Config) (*Server, error) {
 		client:         client,
 		rng:            rng,
 	}
-	handler.HandleFunc("GET /types/counters/keys/{key}", srv.getCounters)
-	handler.HandleFunc("POST /types/counters/keys/{key}", srv.postCounters)
-	handler.HandleFunc("GET /types/registers/keys/{key}", srv.getRegister)
-	handler.HandleFunc("PUT /types/registers/keys/{key}", srv.putRegister)
-	handler.HandleFunc("GET /types/sets/keys/{key}", srv.getSet)
-	handler.HandleFunc("POST /types/sets/keys/{key}", srv.postSet)
+	handler.HandleFunc("GET /counters/{key}", srv.getCounters)
+	handler.HandleFunc("POST /counters/{key}", srv.postCounters)
+	handler.HandleFunc("GET /registers/{key}", srv.getRegister)
+	handler.HandleFunc("PUT /registers/{key}", srv.putRegister)
+	handler.HandleFunc("GET /sets/{key}", srv.getSet)
+	handler.HandleFunc("POST /sets/{key}", srv.postSet)
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	return srv, nil
 }

@@ -23,50 +23,50 @@ docker compose up --build
 Increment a counter on node 0:
 
 ```sh
-curl -X POST localhost:8080/types/counters/keys/visitors -d '{"increment": 5}'
+curl -X POST localhost:8080/counters/visitors -d '{"increment": 5}'
 ```
 
 Read it back from node 1 (after gossip converges):
 
 ```sh
-curl localhost:8081/types/counters/keys/visitors
+curl localhost:8081/counters/visitors
 ```
 
 Decrement:
 
 ```sh
-curl -X POST localhost:8080/types/counters/keys/visitors -d '{"decrement": 2}'
+curl -X POST localhost:8080/counters/visitors -d '{"decrement": 2}'
 ```
 
 Set a register on node 0:
 
 ```sh
-curl -X PUT localhost:8080/types/registers/keys/config -d '{"value": "dark-mode"}'
+curl -X PUT localhost:8080/registers/config -d '{"value": "dark-mode"}'
 ```
 
 Read it from node 2:
 
 ```sh
-curl localhost:8082/types/registers/keys/config
+curl localhost:8082/registers/config
 ```
 
 Add to a set on node 0:
 
 ```sh
-curl -X POST localhost:8080/types/sets/keys/fruits -d '{"add": "apple"}'
-curl -X POST localhost:8080/types/sets/keys/fruits -d '{"add": "banana"}'
+curl -X POST localhost:8080/sets/fruits -d '{"add": "apple"}'
+curl -X POST localhost:8080/sets/fruits -d '{"add": "banana"}'
 ```
 
 Read the set from node 1:
 
 ```sh
-curl localhost:8081/types/sets/keys/fruits
+curl localhost:8081/sets/fruits
 ```
 
 Remove from the set:
 
 ```sh
-curl -X POST localhost:8080/types/sets/keys/fruits -d '{"remove": "apple"}'
+curl -X POST localhost:8080/sets/fruits -d '{"remove": "apple"}'
 ```
 
 ## Limitations

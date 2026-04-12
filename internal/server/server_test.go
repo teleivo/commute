@@ -24,72 +24,72 @@ func TestCounterAPI(t *testing.T) {
 	}{
 		"FetchNonExistent": {
 			method:     http.MethodGet,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			wantStatus: http.StatusNotFound,
 		},
 		"IncrementByOne": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"increment": 1}`,
 			wantStatus: http.StatusOK,
 		},
 		"IncrementByN": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"increment": 5}`,
 			wantStatus: http.StatusOK,
 		},
 		"DecrementByOne": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"decrement": 1}`,
 			wantStatus: http.StatusOK,
 		},
 		"DecrementByN": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"decrement": 3}`,
 			wantStatus: http.StatusOK,
 		},
 		"MissingBody": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       ``,
 			wantStatus: http.StatusBadRequest,
 		},
 		"InvalidJSON": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `not json`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"BothIncrementAndDecrement": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"increment": 5, "decrement": 3}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"IncrementZero": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"increment": 0}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"DecrementZero": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{"decrement": 0}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"NeitherIncrementNorDecrement": {
 			method:     http.MethodPost,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"MethodNotAllowed": {
 			method:     http.MethodDelete,
-			path:       "/types/counters/keys/visitors",
+			path:       "/counters/visitors",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 	}
@@ -118,10 +118,10 @@ func TestCounterAPI(t *testing.T) {
 func TestCounterIncrementAndFetch(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/counters/keys/visitors", `{"increment": 3}`, http.StatusOK)
-	post(t, srv, "/types/counters/keys/visitors", `{"increment": 7}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"increment": 3}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"increment": 7}`, http.StatusOK)
 
-	rec := get(t, srv, "/types/counters/keys/visitors", http.StatusOK)
+	rec := get(t, srv, "/counters/visitors", http.StatusOK)
 
 	var got map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&got)
@@ -132,10 +132,10 @@ func TestCounterIncrementAndFetch(t *testing.T) {
 func TestCounterDecrementAndFetch(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/counters/keys/visitors", `{"increment": 10}`, http.StatusOK)
-	post(t, srv, "/types/counters/keys/visitors", `{"decrement": 3}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"increment": 10}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"decrement": 3}`, http.StatusOK)
 
-	rec := get(t, srv, "/types/counters/keys/visitors", http.StatusOK)
+	rec := get(t, srv, "/counters/visitors", http.StatusOK)
 
 	var got map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&got)
@@ -146,10 +146,10 @@ func TestCounterDecrementAndFetch(t *testing.T) {
 func TestCounterDecrementBelowZero(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/counters/keys/visitors", `{"increment": 2}`, http.StatusOK)
-	post(t, srv, "/types/counters/keys/visitors", `{"decrement": 5}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"increment": 2}`, http.StatusOK)
+	post(t, srv, "/counters/visitors", `{"decrement": 5}`, http.StatusOK)
 
-	rec := get(t, srv, "/types/counters/keys/visitors", http.StatusOK)
+	rec := get(t, srv, "/counters/visitors", http.StatusOK)
 
 	var got map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&got)
@@ -160,16 +160,16 @@ func TestCounterDecrementBelowZero(t *testing.T) {
 func TestCounterSeparateKeys(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/counters/keys/a", `{"increment": 2}`, http.StatusOK)
-	post(t, srv, "/types/counters/keys/b", `{"increment": 5}`, http.StatusOK)
+	post(t, srv, "/counters/a", `{"increment": 2}`, http.StatusOK)
+	post(t, srv, "/counters/b", `{"increment": 5}`, http.StatusOK)
 
-	recA := get(t, srv, "/types/counters/keys/a", http.StatusOK)
+	recA := get(t, srv, "/counters/a", http.StatusOK)
 	var gotA map[string]any
 	err := json.NewDecoder(recA.Body).Decode(&gotA)
 	require.NoError(t, err)
 	assert.EqualValues(t, gotA["value"], any(float64(2)))
 
-	recB := get(t, srv, "/types/counters/keys/b", http.StatusOK)
+	recB := get(t, srv, "/counters/b", http.StatusOK)
 	var gotB map[string]any
 	err = json.NewDecoder(recB.Body).Decode(&gotB)
 	require.NoError(t, err)
@@ -185,48 +185,48 @@ func TestRegisterAPI(t *testing.T) {
 	}{
 		"FetchNonExistent": {
 			method:     http.MethodGet,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			wantStatus: http.StatusNotFound,
 		},
 		"SetString": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       `{"value": "dark-mode"}`,
 			wantStatus: http.StatusOK,
 		},
 		"SetNumber": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       `{"value": 42}`,
 			wantStatus: http.StatusOK,
 		},
 		"SetObject": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       `{"value": {"theme": "dark"}}`,
 			wantStatus: http.StatusOK,
 		},
 		"MissingBody": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       ``,
 			wantStatus: http.StatusBadRequest,
 		},
 		"InvalidJSON": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       `not json`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"MissingValue": {
 			method:     http.MethodPut,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"MethodNotAllowed": {
 			method:     http.MethodDelete,
-			path:       "/types/registers/keys/config",
+			path:       "/registers/config",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 	}
@@ -255,9 +255,9 @@ func TestRegisterAPI(t *testing.T) {
 func TestRegisterSetAndFetch(t *testing.T) {
 	srv := newTestServer(t)
 
-	put(t, srv, "/types/registers/keys/config", `{"value": "dark-mode"}`, http.StatusOK)
+	put(t, srv, "/registers/config", `{"value": "dark-mode"}`, http.StatusOK)
 
-	rec := get(t, srv, "/types/registers/keys/config", http.StatusOK)
+	rec := get(t, srv, "/registers/config", http.StatusOK)
 
 	var got map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&got)
@@ -268,10 +268,10 @@ func TestRegisterSetAndFetch(t *testing.T) {
 func TestRegisterOverwrite(t *testing.T) {
 	srv := newTestServer(t)
 
-	put(t, srv, "/types/registers/keys/config", `{"value": "v1"}`, http.StatusOK)
-	put(t, srv, "/types/registers/keys/config", `{"value": "v2"}`, http.StatusOK)
+	put(t, srv, "/registers/config", `{"value": "v1"}`, http.StatusOK)
+	put(t, srv, "/registers/config", `{"value": "v2"}`, http.StatusOK)
 
-	rec := get(t, srv, "/types/registers/keys/config", http.StatusOK)
+	rec := get(t, srv, "/registers/config", http.StatusOK)
 
 	var got map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&got)
@@ -282,16 +282,16 @@ func TestRegisterOverwrite(t *testing.T) {
 func TestRegisterSeparateKeys(t *testing.T) {
 	srv := newTestServer(t)
 
-	put(t, srv, "/types/registers/keys/a", `{"value": "alpha"}`, http.StatusOK)
-	put(t, srv, "/types/registers/keys/b", `{"value": "beta"}`, http.StatusOK)
+	put(t, srv, "/registers/a", `{"value": "alpha"}`, http.StatusOK)
+	put(t, srv, "/registers/b", `{"value": "beta"}`, http.StatusOK)
 
-	recA := get(t, srv, "/types/registers/keys/a", http.StatusOK)
+	recA := get(t, srv, "/registers/a", http.StatusOK)
 	var gotA map[string]any
 	err := json.NewDecoder(recA.Body).Decode(&gotA)
 	require.NoError(t, err)
 	assert.EqualValues(t, gotA["value"], "alpha")
 
-	recB := get(t, srv, "/types/registers/keys/b", http.StatusOK)
+	recB := get(t, srv, "/registers/b", http.StatusOK)
 	var gotB map[string]any
 	err = json.NewDecoder(recB.Body).Decode(&gotB)
 	require.NoError(t, err)
@@ -307,60 +307,60 @@ func TestSetAPI(t *testing.T) {
 	}{
 		"FetchNonExistent": {
 			method:     http.MethodGet,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			wantStatus: http.StatusNotFound,
 		},
 		"AddString": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{"add": "apple"}`,
 			wantStatus: http.StatusOK,
 		},
 		"RemoveString": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{"remove": "apple"}`,
 			wantStatus: http.StatusOK,
 		},
 		"MissingBody": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       ``,
 			wantStatus: http.StatusBadRequest,
 		},
 		"InvalidJSON": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `not json`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"NeitherAddNorRemove": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"BothAddAndRemove": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{"add": "apple", "remove": "banana"}`,
 			wantStatus: http.StatusOK,
 		},
 		"AddEmptyStringRejected": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{"add": ""}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"RemoveEmptyStringRejected": {
 			method:     http.MethodPost,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			body:       `{"remove": ""}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		"MethodNotAllowed": {
 			method:     http.MethodDelete,
-			path:       "/types/sets/keys/fruits",
+			path:       "/sets/fruits",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 	}
@@ -389,8 +389,8 @@ func TestSetAPI(t *testing.T) {
 func TestSetAddAndFetch(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "banana"}`, http.StatusOK)
 
 	resp := getSet(t, srv, "fruits")
 
@@ -401,8 +401,8 @@ func TestSetAddAndFetch(t *testing.T) {
 func TestSetAddDuplicate(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
 
 	resp := getSet(t, srv, "fruits")
 
@@ -412,10 +412,10 @@ func TestSetAddDuplicate(t *testing.T) {
 func TestSetRemove(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "banana"}`, http.StatusOK)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"remove": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"remove": "apple"}`, http.StatusOK)
 
 	resp := getSet(t, srv, "fruits")
 	assert.EqualValues(t, resp.Value, []string{"banana"})
@@ -424,12 +424,12 @@ func TestSetRemove(t *testing.T) {
 func TestSetRemoveAllElements(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"remove": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"remove": "apple"}`, http.StatusOK)
 
 	// Set exists but is empty.
-	rec := get(t, srv, "/types/sets/keys/fruits", http.StatusOK)
+	rec := get(t, srv, "/sets/fruits", http.StatusOK)
 	var got setResponse
 	err := json.NewDecoder(rec.Body).Decode(&got)
 	require.NoError(t, err)
@@ -439,10 +439,10 @@ func TestSetRemoveAllElements(t *testing.T) {
 func TestSetRemoveNonExistentElement(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
 
 	// Remove an element that doesn't exist in the set.
-	post(t, srv, "/types/sets/keys/fruits", `{"remove": "cherry"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"remove": "cherry"}`, http.StatusOK)
 
 	// The set should still contain apple.
 	resp := getSet(t, srv, "fruits")
@@ -452,11 +452,11 @@ func TestSetRemoveNonExistentElement(t *testing.T) {
 func TestSetAddAndRemoveDifferentElements(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "banana"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "banana"}`, http.StatusOK)
 
 	// Remove banana and add cherry in one request.
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "cherry", "remove": "banana"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "cherry", "remove": "banana"}`, http.StatusOK)
 
 	resp := getSet(t, srv, "fruits")
 
@@ -467,11 +467,11 @@ func TestSetAddAndRemoveDifferentElements(t *testing.T) {
 func TestSetAddAndRemoveSameElement(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
 
 	// Remove and re-add apple in one request. Remove is applied
 	// first, then add, so apple should be present with a fresh tag.
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple", "remove": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple", "remove": "apple"}`, http.StatusOK)
 
 	resp := getSet(t, srv, "fruits")
 
@@ -481,8 +481,8 @@ func TestSetAddAndRemoveSameElement(t *testing.T) {
 func TestSetSeparateKeys(t *testing.T) {
 	srv := newTestServer(t)
 
-	post(t, srv, "/types/sets/keys/fruits", `{"add": "apple"}`, http.StatusOK)
-	post(t, srv, "/types/sets/keys/colors", `{"add": "red"}`, http.StatusOK)
+	post(t, srv, "/sets/fruits", `{"add": "apple"}`, http.StatusOK)
+	post(t, srv, "/sets/colors", `{"add": "red"}`, http.StatusOK)
 
 	respFruits := getSet(t, srv, "fruits")
 	assert.EqualValues(t, respFruits.Value, []string{"apple"})
@@ -538,7 +538,7 @@ type setResponse struct {
 
 func getSet(t *testing.T, h *server.Server, key string) setResponse {
 	t.Helper()
-	rec := get(t, h, "/types/sets/keys/"+key, http.StatusOK)
+	rec := get(t, h, "/sets/"+key, http.StatusOK)
 	var resp setResponse
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)

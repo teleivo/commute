@@ -1,6 +1,5 @@
 # TODO
 
-* Simplify API paths: `/types/counters/keys/{key}` to `/counters/{key}` (drop `/types/` and `/keys/`)
 * OR-Set: replace UUIDs with dotted version vectors, add client-side causal context to HTTP API
 * CRDT Map (map[Key]CRDT, merge delegates per-key)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)

@@ -89,7 +89,7 @@ func (c *cluster) startGossip(ctx context.Context) {
 func (c *cluster) increment(node int, key string, value uint64) {
 	c.t.Helper()
 	body := fmt.Sprintf(`{"increment": %d}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/types/counters/keys/"+key, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
@@ -99,7 +99,7 @@ func (c *cluster) increment(node int, key string, value uint64) {
 func (c *cluster) decrement(node int, key string, value uint64) {
 	c.t.Helper()
 	body := fmt.Sprintf(`{"decrement": %d}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/types/counters/keys/"+key, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
@@ -108,7 +108,7 @@ func (c *cluster) decrement(node int, key string, value uint64) {
 
 func (c *cluster) getValue(node int, key string) int64 {
 	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/types/counters/keys/"+key, nil)
+	req := httptest.NewRequest(http.MethodGet, "/counters/"+key, nil)
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
 	if rec.Code == http.StatusNotFound {
@@ -124,7 +124,7 @@ func (c *cluster) getValue(node int, key string) int64 {
 func (c *cluster) addToSet(node int, key, value string) {
 	c.t.Helper()
 	body := fmt.Sprintf(`{"add": %q}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/types/sets/keys/"+key, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/sets/"+key, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
@@ -133,7 +133,7 @@ func (c *cluster) addToSet(node int, key, value string) {
 
 func (c *cluster) getSetValues(node int, key string) []string {
 	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/types/sets/keys/"+key, nil)
+	req := httptest.NewRequest(http.MethodGet, "/sets/"+key, nil)
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
 	if rec.Code == http.StatusNotFound {
@@ -152,7 +152,7 @@ func (c *cluster) getSetValues(node int, key string) []string {
 func (c *cluster) removeFromSet(node int, key, value string) {
 	c.t.Helper()
 	body := fmt.Sprintf(`{"remove": %q}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/types/sets/keys/"+key, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/sets/"+key, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
@@ -162,7 +162,7 @@ func (c *cluster) removeFromSet(node int, key, value string) {
 func (c *cluster) setRegister(node int, key, value string) {
 	c.t.Helper()
 	body := fmt.Sprintf(`{"value": %q}`, value)
-	req := httptest.NewRequest(http.MethodPut, "/types/registers/keys/"+key, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/registers/"+key, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
@@ -171,7 +171,7 @@ func (c *cluster) setRegister(node int, key, value string) {
 
 func (c *cluster) getRegister(node int, key string) string {
 	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/types/registers/keys/"+key, nil)
+	req := httptest.NewRequest(http.MethodGet, "/registers/"+key, nil)
 	rec := httptest.NewRecorder()
 	c.nodes[node].ServeHTTP(rec, req)
 	if rec.Code == http.StatusNotFound {
