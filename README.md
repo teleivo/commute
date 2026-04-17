@@ -75,6 +75,12 @@ curl -X POST localhost:8080/sets/fruits -d '{"remove": "apple"}'
 * Full-state gossip: every round sends the entire store, no delta optimization
 * No persistence: all state is in memory and lost on restart
 
+## Acknowledgments
+
+* Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data Types](https://inria.hal.science/inria-00555588/document). CRDT specifications this project implements.
+* Almeida et al., [Scalable and Accurate Causality Tracking for Eventually Consistent Stores](https://inria.hal.science/hal-01287733). DVVSet design used for causality tracking.
+* Gonçalves & Almeida, [Dotted-Version-Vectors](https://github.com/ricardobcl/Dotted-Version-Vectors). Reference Erlang implementation of DVVSet used as a guide and test source.
+
 ## Disclaimer
 
 I wrote this for my personal learning and it is provided as-is without warranty. Feel free to use it!
