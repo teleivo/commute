@@ -1,10 +1,8 @@
 # TODO
 
 * OR-Set: replace UUIDs with dotted version vectors, add client-side causal context to HTTP API
-  * go through sync again
-  * write update
-  * write less/equal
-  * wire through in or set and http layer
+  * wire DVVSet into OR-Set and HTTP layer
+  * write less/equal (needed for anti-entropy, can defer until then)
   * update readme and example
 * CRDT Map (map[Key]CRDT, merge delegates per-key)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)

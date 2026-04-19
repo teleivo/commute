@@ -35,9 +35,9 @@ func NewDVVSet[T any](nodeID NodeID) *DVVSet[T] {
 // VV is a version vector: a mapping from node id to the highest counter known for that node.
 type VV map[NodeID]uint64
 
-// Get returns vv's counter for nodeID, or 0 if nodeID is not in vv. It corresponds to the paper's
+// get returns vv's counter for nodeID, or 0 if nodeID is not in vv. It corresponds to the paper's
 // notation C(r), which is 0 for any unmapped id.
-func (vv VV) Get(nodeID NodeID) uint64 {
+func (vv VV) get(nodeID NodeID) uint64 {
 	if v, ok := vv[nodeID]; ok {
 		return v
 	}
@@ -65,12 +65,12 @@ func (ds *DVVSet[T]) Join() VV {
 	return result
 }
 
-// Discard drops siblings from ds whose dots are covered by the given version vector vv. For each
+// discard drops siblings from ds whose dots are covered by the given version vector vv. For each
 // entry (r, n, l), it keeps the first n−vv(r) siblings since dots (r, 1)…(r, vv(r)) are already
 // known to vv. Ids only in vv are ignored:
 //
 //	discard(S, C) = {(r, n, first(n − C(r), l)) | (r, n, l) ∈ S}.
-func (ds *DVVSet[T]) Discard(vv VV) {
+func (ds *DVVSet[T]) discard(vv VV) {
 	for k, v := range ds.state {
 		if counter, ok := vv[k]; ok {
 			if v.counter > counter {
@@ -83,13 +83,13 @@ func (ds *DVVSet[T]) Discard(vv VV) {
 	}
 }
 
-// Event records a new write of value on this node, advancing ds's causal history. ds's own entry
+// event records a new write of value on this node, advancing ds's causal history. ds's own entry
 // gets a fresh dot (nodeID, n+1) with value prepended. Other entries have their counter bumped to
 // max(n, vv(i)) so ds absorbs knowledge carried by vv. Ids only in vv do not produce new entries:
 //
 //	event(C, S, r, v) = {(i, n+1, [v | l]) | (i, n, l) ∈ S | i = r}
 //	                  ∪ {(i, max(n, C(i)), l) | (i, n, l) ∈ S | i ≠ r}.
-func (ds *DVVSet[T]) Event(vv VV, value T) {
+func (ds *DVVSet[T]) event(vv VV, value T) {
 	if v, ok := ds.state[ds.nodeID]; ok {
 		ds.state[ds.nodeID] = dvvEntry[T]{
 			counter: v.counter + 1,
@@ -105,7 +105,7 @@ func (ds *DVVSet[T]) Event(vv VV, value T) {
 		if k == ds.nodeID {
 			continue
 		}
-		if bumped := max(v.counter, vv.Get(k)); bumped != v.counter {
+		if bumped := max(v.counter, vv.get(k)); bumped != v.counter {
 			v.counter = bumped
 			ds.state[k] = v
 		}
@@ -145,4 +145,12 @@ func (ds *DVVSet[T]) Sync(other *DVVSet[T]) {
 			ds.state[id] = other.state[id]
 		}
 	}
+}
+
+// Update serves a put against ds with the given client context vv and new value: it drops siblings
+// vv already knows about, then generates a fresh dot for value on this node. This is the put flow from
+// paper §6.2: discard obsolete versions, then event to record the new one.
+func (ds *DVVSet[T]) Update(vv VV, value T) {
+	ds.discard(vv)
+	ds.event(vv, value)
 }

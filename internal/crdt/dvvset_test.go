@@ -81,7 +81,7 @@ func TestDVVSetDiscard(t *testing.T) {
 			},
 		}
 
-		d.Discard(VV{})
+		d.discard(VV{})
 
 		assert.EqualValues(t, d.Values(), []string{"v2", "v1"})
 	})
@@ -94,7 +94,7 @@ func TestDVVSetDiscard(t *testing.T) {
 			},
 		}
 
-		d.Discard(VV{"a": 2})
+		d.discard(VV{"a": 2})
 
 		assert.Nil(t, d.Values())
 	})
@@ -110,7 +110,7 @@ func TestDVVSetDiscard(t *testing.T) {
 			},
 		}
 
-		d.Discard(VV{"a": 1})
+		d.discard(VV{"a": 1})
 
 		got := d.Values()
 		assert.EqualValues(t, got, []string{"v3", "v2"})
@@ -125,7 +125,7 @@ func TestDVVSetDiscard(t *testing.T) {
 			},
 		}
 
-		d.Discard(VV{"a": 5})
+		d.discard(VV{"a": 5})
 
 		assert.Nil(t, d.Values())
 	})
@@ -139,7 +139,7 @@ func TestDVVSetDiscard(t *testing.T) {
 			},
 		}
 
-		d.Discard(VV{"a": 1})
+		d.discard(VV{"a": 1})
 
 		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
 		assert.EqualValues(t, d.state["b"].values, []string{"vb"})
@@ -151,7 +151,7 @@ func TestDVVSetEvent(t *testing.T) {
 		// r not in S, empty context: new entry (r, 1, [v]).
 		d := NewDVVSet[string]("a")
 
-		d.Event(VV{}, "v1")
+		d.event(VV{}, "v1")
 
 		assert.Equals(t, d.state["a"].counter, uint64(1))
 		assert.EqualValues(t, d.state["a"].values, []string{"v1"})
@@ -165,7 +165,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{}, "v2")
+		d.event(VV{}, "v2")
 
 		assert.Equals(t, d.state["a"].counter, uint64(2))
 		assert.EqualValues(t, d.state["a"].values, []string{"v2", "v1"})
@@ -179,7 +179,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{}, "v2")
+		d.event(VV{}, "v2")
 
 		assert.Equals(t, d.state["a"].counter, uint64(1))
 		assert.EqualValues(t, d.state["a"].values, []string{"v1"})
@@ -196,7 +196,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{"a": 1}, "v2")
+		d.event(VV{"a": 1}, "v2")
 
 		assert.Equals(t, d.state["a"].counter, uint64(3))
 		assert.EqualValues(t, d.state["a"].values, []string{"v1"})
@@ -213,7 +213,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{"a": 5}, "v2")
+		d.event(VV{"a": 5}, "v2")
 
 		assert.Equals(t, d.state["a"].counter, uint64(5))
 		assert.EqualValues(t, d.state["a"].values, []string{"v1"})
@@ -225,7 +225,7 @@ func TestDVVSetEvent(t *testing.T) {
 		// The set-builder ranges over S: ids only in C (and not r) do not add entries.
 		d := NewDVVSet[string]("a")
 
-		d.Event(VV{"b": 4}, "v1")
+		d.event(VV{"b": 4}, "v1")
 
 		_, hasB := d.state["b"]
 		assert.False(t, hasB, "expected b not added to S, got %v", d.state["b"])
@@ -243,7 +243,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{"a": 10}, "v2")
+		d.event(VV{"a": 10}, "v2")
 
 		assert.Equals(t, d.state["a"].counter, uint64(3))
 		assert.EqualValues(t, d.state["a"].values, []string{"v2", "v1"})
@@ -258,7 +258,7 @@ func TestDVVSetEvent(t *testing.T) {
 			},
 		}
 
-		d.Event(VV{"a": 7, "b": 3}, "vc")
+		d.event(VV{"a": 7, "b": 3}, "vc")
 
 		assert.Equals(t, d.state["a"].counter, uint64(7))
 		assert.EqualValues(t, d.state["a"].values, []string{"va"})
@@ -503,5 +503,89 @@ func TestDVVSetSync(t *testing.T) {
 		assert.Equals(t, len(other.state), 1, "expected other.state size 1, got %v", other.state)
 		assert.Equals(t, other.state["b"].counter, uint64(1))
 		assert.EqualValues(t, other.state["b"].values, []string{"vb"})
+	})
+}
+
+func TestDVVSetUpdate(t *testing.T) {
+	t.Run("FirstWriteWithEmptyContext", func(t *testing.T) {
+		// Fresh client, fresh server: discard is a no-op, event generates (a, 1, [v1]).
+		d := NewDVVSet[string]("a")
+
+		d.Update(VV{}, "v1")
+
+		assert.Equals(t, d.state["a"].counter, uint64(1))
+		assert.EqualValues(t, d.state["a"].values, []string{"v1"})
+	})
+
+	t.Run("ReplacesSiblingClientAlreadyKnew", func(t *testing.T) {
+		// Server has (a, 1, [v1]); client read it and writes v2 with ctx {a:1}.
+		// Discard drops v1; event then generates (a, 2, [v2]).
+		d := &DVVSet[string]{
+			nodeID: "a",
+			state: map[NodeID]dvvEntry[string]{
+				"a": {counter: 1, values: []string{"v1"}},
+			},
+		}
+
+		d.Update(VV{"a": 1}, "v2")
+
+		assert.Equals(t, d.state["a"].counter, uint64(2))
+		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
+	})
+
+	t.Run("ConcurrentWriteKeepsSibling", func(t *testing.T) {
+		// Server has (a, 1, [v1]); client writes v2 with empty context (didn't read v1).
+		// Discard is a no-op since vv is empty; event prepends v2, keeping v1 as concurrent.
+		d := &DVVSet[string]{
+			nodeID: "a",
+			state: map[NodeID]dvvEntry[string]{
+				"a": {counter: 1, values: []string{"v1"}},
+			},
+		}
+
+		d.Update(VV{}, "v2")
+
+		assert.Equals(t, d.state["a"].counter, uint64(2))
+		assert.EqualValues(t, d.state["a"].values, []string{"v2", "v1"})
+	})
+
+	t.Run("DropsSiblingOnlyForCoveredID", func(t *testing.T) {
+		// Server has (a, 1, [va]) and (b, 1, [vb]). Client writes on a with ctx {a:1}.
+		// Discard drops va but leaves vb; event generates (a, 2, [v2]) and bumps/keeps b.
+		d := &DVVSet[string]{
+			nodeID: "a",
+			state: map[NodeID]dvvEntry[string]{
+				"a": {counter: 1, values: []string{"va"}},
+				"b": {counter: 1, values: []string{"vb"}},
+			},
+		}
+
+		d.Update(VV{"a": 1}, "v2")
+
+		assert.Equals(t, d.state["a"].counter, uint64(2))
+		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
+		assert.Equals(t, d.state["b"].counter, uint64(1))
+		assert.EqualValues(t, d.state["b"].values, []string{"vb"})
+	})
+
+	t.Run("AbsorbsContextKnowledgeForOtherID", func(t *testing.T) {
+		// Server has (b, 1, [vb]) but never heard of c. Client on a writes with ctx {c: 3}.
+		// Set-builder for event ranges over S, so c is not added. But if ctx also covers b,
+		// discard drops vb.
+		d := &DVVSet[string]{
+			nodeID: "a",
+			state: map[NodeID]dvvEntry[string]{
+				"b": {counter: 1, values: []string{"vb"}},
+			},
+		}
+
+		d.Update(VV{"b": 1, "c": 3}, "va")
+
+		assert.Equals(t, d.state["a"].counter, uint64(1))
+		assert.EqualValues(t, d.state["a"].values, []string{"va"})
+		assert.Equals(t, d.state["b"].counter, uint64(1))
+		assert.Nil(t, d.state["b"].values)
+		_, hasC := d.state["c"]
+		assert.False(t, hasC, "expected c not added, got %v", d.state["c"])
 	})
 }
