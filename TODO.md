@@ -1,7 +1,13 @@
 # TODO
 
 * OR-Set: replace UUIDs with dotted version vectors, add client-side causal context to HTTP API
-  * wire DVVSet into OR-Set and HTTP layer
+  * change OR-Set state from `map[string][]uuid.UUID` add/remove maps to one DVVSet per element,
+    e.g. `map[string]*DVVSet[orOp]` where `orOp` carries an add/remove marker; Contains checks
+    live `added=true` siblings, Add/Remove call DVVSet.Update, Merge calls DVVSet.Sync per key
+  * HTTP GET: return the element's opaque context alongside the value, i.e. base64(json(dvvset.Join()))
+    in a `"context"` JSON field (Riak-style X-Riak-Vclock equivalent)
+  * HTTP PUT: accept `"context"` from the request body, decode back to a VV, pass to OR-Set's
+    Add/Remove which call DVVSet.Update(vv, op)
   * write less/equal (needed for anti-entropy, can defer until then)
   * update readme and example
 * CRDT Map (map[Key]CRDT, merge delegates per-key)

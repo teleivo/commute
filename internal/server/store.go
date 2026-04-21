@@ -117,7 +117,7 @@ func (st *Store) AddSet(key, value string) {
 	st.muSets.Lock()
 	set, ok := st.sets[key]
 	if !ok {
-		set = crdt.NewORSet()
+		set = crdt.NewORSet(st.nodeID)
 		st.sets[key] = set
 	}
 	set.Add(value)
@@ -129,7 +129,7 @@ func (st *Store) RemoveSet(key, value string) {
 	st.muSets.Lock()
 	set, ok := st.sets[key]
 	if !ok {
-		set = crdt.NewORSet()
+		set = crdt.NewORSet(st.nodeID)
 		st.sets[key] = set
 	}
 	set.Remove(value)
@@ -159,7 +159,7 @@ func (st *Store) Merge(msg Message) {
 	st.muSets.Lock()
 	for k, incoming := range msg.Sets {
 		if _, ok := st.sets[k]; !ok {
-			st.sets[k] = crdt.NewORSet()
+			st.sets[k] = crdt.NewORSet(st.nodeID)
 		}
 		st.sets[k].Merge(incoming)
 	}

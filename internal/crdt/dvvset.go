@@ -1,6 +1,7 @@
 package crdt
 
 import (
+	"encoding/json"
 	"slices"
 )
 
@@ -22,6 +23,31 @@ type DVVSet[T any] struct {
 type dvvEntry[T any] struct {
 	counter uint64
 	values  []T
+}
+
+// MarshalJSON is defined on dvvEntry because its fields are unexported; encoding/json would
+// otherwise produce an empty object.
+func (e dvvEntry[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Counter uint64 `json:"counter"`
+		Values  []T    `json:"values"`
+	}{
+		Counter: e.counter,
+		Values:  e.values,
+	})
+}
+
+func (e *dvvEntry[T]) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Counter uint64 `json:"counter"`
+		Values  []T    `json:"values"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	e.counter = v.Counter
+	e.values = v.Values
+	return nil
 }
 
 // NewDVVSet creates an empty DVVSet owned by the given node.
@@ -153,4 +179,30 @@ func (ds *DVVSet[T]) Sync(other *DVVSet[T]) {
 func (ds *DVVSet[T]) Update(vv VV, value T) {
 	ds.discard(vv)
 	ds.event(vv, value)
+}
+
+// MarshalJSON serializes only the replicated state. nodeID identifies the local replica and is
+// not part of the data shared across nodes.
+func (ds *DVVSet[T]) MarshalJSON() ([]byte, error) {
+	if ds == nil {
+		return []byte("null"), nil
+	}
+	v := struct {
+		State map[NodeID]dvvEntry[T] `json:"state"`
+	}{
+		State: ds.state,
+	}
+	return json.Marshal(v)
+}
+
+func (ds *DVVSet[T]) UnmarshalJSON(data []byte) error {
+	var v struct {
+		State map[NodeID]dvvEntry[T] `json:"state"`
+	}
+	err := json.Unmarshal(data, &v)
+	if err != nil {
+		return err
+	}
+	ds.state = v.State
+	return nil
 }

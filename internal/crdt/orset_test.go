@@ -10,13 +10,13 @@ import (
 
 func TestORSetContains(t *testing.T) {
 	t.Run("Empty", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		assert.False(t, s.Contains("apple"))
 	})
 
 	t.Run("AfterAdd", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 
@@ -24,7 +24,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("NotAdded", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 
@@ -32,7 +32,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("AfterAddAndRemove", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Remove("apple")
@@ -41,7 +41,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("RemoveNonExistent", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Remove("apple")
 
@@ -49,7 +49,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("ReAddAfterRemove", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Remove("apple")
@@ -59,7 +59,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("MultipleElements", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("banana")
@@ -72,7 +72,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("RemoveOnlyAffectsTarget", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("banana")
@@ -83,7 +83,7 @@ func TestORSetContains(t *testing.T) {
 	})
 
 	t.Run("DuplicateAdd", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("apple")
@@ -95,8 +95,8 @@ func TestORSetContains(t *testing.T) {
 func TestORSetMerge(t *testing.T) {
 	t.Run("BothEmpty", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
-		b := NewORSet()
+		a := NewORSet("a")
+		b := NewORSet("b")
 
 		a.Merge(b)
 
@@ -105,8 +105,8 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("MergeIntoEmpty", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
-		b := NewORSet()
+		a := NewORSet("a")
+		b := NewORSet("b")
 		b.Add("apple")
 
 		a.Merge(b)
@@ -116,9 +116,9 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("MergeFromEmpty", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
-		b := NewORSet()
+		b := NewORSet("b")
 
 		a.Merge(b)
 
@@ -127,9 +127,9 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("DisjointElements", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Add("banana")
 
 		a.Merge(b)
@@ -140,9 +140,9 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("SameElement", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Add("apple")
 
 		a.Merge(b)
@@ -152,9 +152,9 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("MergeIsIdempotent", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Add("banana")
 
 		a.Merge(b)
@@ -170,13 +170,13 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("MergeIsCommutative", func(t *testing.T) {
 		t.Parallel()
-		a1 := NewORSet()
+		a1 := NewORSet("a")
 		a1.Add("apple")
-		b1 := NewORSet()
+		b1 := NewORSet("b")
 		b1.Add("banana")
-		a2 := NewORSet()
+		a2 := NewORSet("a")
 		a2.Add("apple")
-		b2 := NewORSet()
+		b2 := NewORSet("b")
 		b2.Add("banana")
 
 		a1.Merge(b1)
@@ -188,7 +188,7 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("MergeSelf", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
 
 		a.Merge(a)
@@ -198,10 +198,10 @@ func TestORSetMerge(t *testing.T) {
 
 	t.Run("RemovePropagates", func(t *testing.T) {
 		t.Parallel()
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
 		a.Add("banana")
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Merge(a)
 
 		b.Remove("apple")
@@ -214,10 +214,10 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("ConcurrentAddWinsOverRemove", func(t *testing.T) {
 		t.Parallel()
 		// Node a adds apple.
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
 		// Node b receives apple via merge.
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Merge(a)
 
 		// Node b removes apple (observing the dot from a).
@@ -236,12 +236,12 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("ConcurrentRemovesBothApply", func(t *testing.T) {
 		t.Parallel()
 		// Node a adds apple.
-		a := NewORSet()
+		a := NewORSet("a")
 		a.Add("apple")
 		// Both b and c receive apple via merge.
-		b := NewORSet()
+		b := NewORSet("b")
 		b.Merge(a)
-		c := NewORSet()
+		c := NewORSet("c")
 		c.Merge(a)
 
 		// Both b and c remove apple concurrently.
@@ -257,13 +257,13 @@ func TestORSetMerge(t *testing.T) {
 
 func TestORSetValues(t *testing.T) {
 	t.Run("Empty", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		assert.EqualValues(t, s.Values(), []string(nil))
 	})
 
 	t.Run("SingleElement", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 
@@ -271,7 +271,7 @@ func TestORSetValues(t *testing.T) {
 	})
 
 	t.Run("MultipleElements", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("banana")
@@ -283,7 +283,7 @@ func TestORSetValues(t *testing.T) {
 	})
 
 	t.Run("DuplicateAddReturnsSingle", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("apple")
@@ -292,7 +292,7 @@ func TestORSetValues(t *testing.T) {
 	})
 
 	t.Run("AfterRemove", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Add("banana")
@@ -302,7 +302,7 @@ func TestORSetValues(t *testing.T) {
 	})
 
 	t.Run("AfterRemoveAll", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Remove("apple")
@@ -311,7 +311,7 @@ func TestORSetValues(t *testing.T) {
 	})
 
 	t.Run("ReAddAfterRemove", func(t *testing.T) {
-		s := NewORSet()
+		s := NewORSet("a")
 
 		s.Add("apple")
 		s.Remove("apple")
@@ -322,7 +322,7 @@ func TestORSetValues(t *testing.T) {
 }
 
 func TestORSetMarshalRoundtrip(t *testing.T) {
-	a := NewORSet()
+	a := NewORSet("a")
 	a.Add("apple")
 	a.Add("banana")
 	a.Add("cherry")
@@ -331,7 +331,7 @@ func TestORSetMarshalRoundtrip(t *testing.T) {
 	data, err := json.Marshal(a)
 	assert.NoError(t, err)
 
-	b := NewORSet()
+	b := NewORSet("b")
 	err = json.Unmarshal(data, b)
 	assert.NoError(t, err)
 
