@@ -374,10 +374,12 @@ func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Remove != "" {
-		srv.store.RemoveSet(key, body.Remove)
+		// TODO parse client causal context from request body and pass it here
+		srv.store.RemoveSet(key, body.Remove, crdt.VV{})
 	}
 	if body.Add != "" {
-		srv.store.AddSet(key, body.Add)
+		// TODO parse client causal context from request body and pass it here
+		srv.store.AddSet(key, body.Add, crdt.VV{})
 	}
 
 	w.WriteHeader(http.StatusOK)

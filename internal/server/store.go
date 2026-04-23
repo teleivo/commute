@@ -112,27 +112,29 @@ func (st *Store) GetSet(key string) ([]string, bool) {
 	return value, true
 }
 
-// AddSet adds a value to the set for key, creating it if it doesn't exist.
-func (st *Store) AddSet(key, value string) {
+// AddSet adds a value to the set for key with the given client causal context vv, creating the
+// set if it doesn't exist.
+func (st *Store) AddSet(key, value string, vv crdt.VV) {
 	st.muSets.Lock()
 	set, ok := st.sets[key]
 	if !ok {
 		set = crdt.NewORSet(st.nodeID)
 		st.sets[key] = set
 	}
-	set.Add(value)
+	set.Add(value, vv)
 	st.muSets.Unlock()
 }
 
-// RemoveSet removes a value from the set for key, creating it if it doesn't exist.
-func (st *Store) RemoveSet(key, value string) {
+// RemoveSet removes a value from the set for key with the given client causal context vv, creating
+// the set if it doesn't exist.
+func (st *Store) RemoveSet(key, value string, vv crdt.VV) {
 	st.muSets.Lock()
 	set, ok := st.sets[key]
 	if !ok {
 		set = crdt.NewORSet(st.nodeID)
 		st.sets[key] = set
 	}
-	set.Remove(value)
+	set.Remove(value, vv)
 	st.muSets.Unlock()
 }
 

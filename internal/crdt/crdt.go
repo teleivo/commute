@@ -211,13 +211,12 @@ func (lww *LWWRegister) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &lww.entry)
 }
 
-// ORSet is an observed-remove set. Causality for each element is tracked in a per-element DVVSet
-// whose siblings are add/remove markers (true for add, false for remove). A concurrent Add and
-// Remove of the same element lets the Add win, because both markers survive Sync as concurrent
-// siblings and Contains reports presence when an add marker is still live.
+// ORSet is an observed-remove set. A remove affects only adds that are in its causal past, so a
+// remove concurrent with an add cannot hide that add: the element stays in the set.
 type ORSet struct {
 	nodeID NodeID
-	state  map[string]*DVVSet[bool]
+	// state maps each element to its per-element DVVSet of add/remove markers (true = add, false = remove).
+	state map[string]*DVVSet[bool]
 }
 
 // NewORSet creates an empty OR-Set owned by the given node.
@@ -228,6 +227,17 @@ func NewORSet(nodeID NodeID) *ORSet {
 	}
 }
 
+// CausalContext returns the version vector summarizing all add/remove events this replica has
+// observed for value. Clients echo this back on subsequent Add/Remove calls so concurrent ops
+// from other replicas are detected correctly. Returns an empty VV if value is unknown here.
+func (or *ORSet) CausalContext(value string) VV {
+	v, ok := or.state[value]
+	if !ok {
+		return VV{}
+	}
+	return v.Join()
+}
+
 // Contains reports whether value is in the set by inspecting its DVVSet siblings.
 func (or *ORSet) Contains(value string) bool {
 	state, added := or.state[value]
@@ -235,14 +245,12 @@ func (or *ORSet) Contains(value string) bool {
 		return false
 	}
 	for _, v := range state.Values() {
-		if !v {
-			return false
+		if v {
+			return true
 		}
 	}
 
-	// TODO add has to come before removed which this here relies on. ok? otherwise I need to check
-	// if Values has at least one true
-	return true
+	return false
 }
 
 // Values returns all elements currently in the set. Order is not specified.
@@ -256,29 +264,27 @@ func (or *ORSet) Values() []string {
 	return values
 }
 
-// Add records an add of value on this node by advancing value's DVVSet with an add marker.
-func (or *ORSet) Add(value string) {
+// Add records an add of value on this node by advancing value's DVVSet with an add marker. The
+// client VV is the causal context returned by a prior read and echoed back by the client; it
+// determines which existing siblings are causally observed and discarded by this add.
+func (or *ORSet) Add(value string, vv VV) {
 	state, ok := or.state[value]
 	if !ok {
 		state = NewDVVSet[bool](or.nodeID)
 	}
-	// TODO wire VV through from client
-	state.Update(VV{}, true)
+	state.Update(vv, true)
 	or.state[value] = state
 }
 
 // Remove records a remove of value on this node by advancing value's DVVSet with a remove marker.
-// If value was never added it is a no-op, matching the OR-Set precondition that a remove observes
-// a prior add.
-func (or *ORSet) Remove(value string) {
+// If value was never added it is a no-op: a lone remove-marker would be beaten by any concurrent
+// add anyway (OR-Set semantics favor add), so there is nothing worth tracking.
+func (or *ORSet) Remove(value string, vv VV) {
 	state, added := or.state[value]
-	if !added {
-		// TODO in U-set its a precondition that it has been added but not in OR-set is it? or still
-		// because remove does not generate an id so
+	if !added { // value was never added
 		return
 	}
-	// TODO wire VV through from client
-	state.Update(VV{}, false)
+	state.Update(vv, false)
 }
 
 // Merge incorporates the state of other into or by syncing per-element DVVSets. Elements only in
