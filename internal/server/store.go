@@ -100,16 +100,17 @@ func (st *Store) GetRegister(key string) (json.RawMessage, bool) {
 }
 
 // GetSet returns the values of the set for key, or false if it doesn't exist.
-func (st *Store) GetSet(key string) ([]string, bool) {
+func (st *Store) GetSet(key string) ([]string, map[string]crdt.VV, bool) {
 	st.muSets.RLock()
 	set, ok := st.sets[key]
 	if !ok {
 		st.muSets.RUnlock()
-		return nil, false
+		return nil, nil, false
 	}
 	value := set.Values()
+	vvs := set.CausalContexts()
 	st.muSets.RUnlock()
-	return value, true
+	return value, vvs, true
 }
 
 // AddSet adds a value to the set for key with the given client causal context vv, creating the

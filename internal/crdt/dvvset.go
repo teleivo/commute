@@ -14,8 +14,7 @@ import (
 //
 // [Scalable and Accurate Causality Tracking for Eventually Consistent Stores]: https://inria.hal.science/hal-01287733
 type DVVSet[T any] struct {
-	nodeID NodeID
-	state  map[NodeID]dvvEntry[T]
+	state map[NodeID]dvvEntry[T]
 }
 
 // dvvEntry is the (n, l) pair of a DVVSet triple; its id is the map key in state. Siblings in
@@ -50,12 +49,24 @@ func (e *dvvEntry[T]) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// NewDVVSet creates an empty DVVSet owned by the given node.
-func NewDVVSet[T any](nodeID NodeID) *DVVSet[T] {
+// NewDVVSet creates an empty DVVSet. DVVSet is pure causal state; the owning replica's id is
+// passed per call to Event/Update rather than stored on the struct.
+func NewDVVSet[T any]() *DVVSet[T] {
 	return &DVVSet[T]{
-		nodeID: nodeID,
-		state:  make(map[NodeID]dvvEntry[T]),
+		state: make(map[NodeID]dvvEntry[T]),
 	}
+}
+
+// Clone returns a deep copy of ds. The state map and each entry's siblings slice are newly
+// allocated, so the copy can be mutated independently. If T is a reference type (pointer, slice,
+// map, or contains one), element values themselves are shared: Clone does not recurse into T.
+// This is sufficient for ORSet's DVVSet[bool] since bool is not a reference type.
+func (ds *DVVSet[T]) Clone() *DVVSet[T] {
+	s := make(map[NodeID]dvvEntry[T], len(ds.state))
+	for k, v := range ds.state {
+		s[k] = dvvEntry[T]{counter: v.counter, values: slices.Clone(v.values)}
+	}
+	return &DVVSet[T]{state: s}
 }
 
 // VV is a version vector: a mapping from node id to the highest counter known for that node.
@@ -109,26 +120,27 @@ func (ds *DVVSet[T]) discard(vv VV) {
 	}
 }
 
-// event records a new write of value on this node, advancing ds's causal history. ds's own entry
-// gets a fresh dot (nodeID, n+1) with value prepended. Other entries have their counter bumped to
-// max(n, vv(i)) so ds absorbs knowledge carried by vv. Ids only in vv do not produce new entries:
+// event records a new write of value performed by the replica identified by nodeID, advancing
+// ds's causal history. That replica's entry gets a fresh dot (nodeID, n+1) with value prepended.
+// Other entries have their counter bumped to max(n, vv(i)) so ds absorbs knowledge carried by vv.
+// Ids only in vv do not produce new entries:
 //
 //	event(C, S, r, v) = {(i, n+1, [v | l]) | (i, n, l) ∈ S | i = r}
 //	                  ∪ {(i, max(n, C(i)), l) | (i, n, l) ∈ S | i ≠ r}.
-func (ds *DVVSet[T]) event(vv VV, value T) {
-	if v, ok := ds.state[ds.nodeID]; ok {
-		ds.state[ds.nodeID] = dvvEntry[T]{
+func (ds *DVVSet[T]) event(nodeID NodeID, vv VV, value T) {
+	if v, ok := ds.state[nodeID]; ok {
+		ds.state[nodeID] = dvvEntry[T]{
 			counter: v.counter + 1,
 			values:  slices.Insert(v.values, 0, value),
 		}
 	} else {
-		ds.state[ds.nodeID] = dvvEntry[T]{
+		ds.state[nodeID] = dvvEntry[T]{
 			counter: 1,
 			values:  []T{value},
 		}
 	}
 	for k, v := range ds.state {
-		if k == ds.nodeID {
+		if k == nodeID {
 			continue
 		}
 		if bumped := max(v.counter, vv.get(k)); bumped != v.counter {
@@ -173,16 +185,17 @@ func (ds *DVVSet[T]) Sync(other *DVVSet[T]) {
 	}
 }
 
-// Update serves a put against ds with the given client context vv and new value: it drops siblings
-// vv already knows about, then generates a fresh dot for value on this node. This is the put flow from
-// paper §6.2: discard obsolete versions, then event to record the new one.
-func (ds *DVVSet[T]) Update(vv VV, value T) {
+// Update serves a put against ds coordinated by the replica identified by nodeID with the given
+// client context vv and new value: it drops siblings vv already knows about, then generates a
+// fresh dot for value on that replica. This is the put flow from paper §6.2: discard obsolete
+// versions, then event to record the new one.
+func (ds *DVVSet[T]) Update(nodeID NodeID, vv VV, value T) {
 	ds.discard(vv)
-	ds.event(vv, value)
+	ds.event(nodeID, vv, value)
 }
 
-// MarshalJSON serializes only the replicated state. nodeID identifies the local replica and is
-// not part of the data shared across nodes.
+// MarshalJSON serializes ds's replicated state. Owning-replica identity is not part of the wire
+// format; it is supplied per call to Event/Update.
 func (ds *DVVSet[T]) MarshalJSON() ([]byte, error) {
 	if ds == nil {
 		return []byte("null"), nil

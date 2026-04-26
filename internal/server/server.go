@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -313,12 +314,14 @@ func (srv *Server) putRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 type setRequestBody struct {
-	Add    string `json:"add"`
-	Remove string `json:"remove"`
+	Add      []string          `json:"add"`
+	Remove   []string          `json:"remove"`
+	Contexts map[string]string `json:"contexts"`
 }
 
 type setResponseBody struct {
-	Value []string `json:"value"`
+	Values   []string          `json:"values"`
+	Contexts map[string]string `json:"contexts"`
 }
 
 func (srv *Server) getSet(w http.ResponseWriter, r *http.Request) {
@@ -328,23 +331,45 @@ func (srv *Server) getSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	value, ok := srv.store.GetSet(key)
+	values, vvs, ok := srv.store.GetSet(key)
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	if value == nil {
-		value = []string{}
+	if values == nil {
+		values = []string{}
 	}
+	contexts, err := encodeContexts(vvs)
+	if err != nil {
+		srv.logger.Error("failed to encode set contexts", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	resp := setResponseBody{
-		Value: value,
+		Values:   values,
+		Contexts: contexts,
 	}
 	e := json.NewEncoder(w)
-	err := e.Encode(resp)
+	err = e.Encode(resp)
 	if err != nil {
 		srv.logger.Error("failed to encode set value", "err", err)
 	}
+}
+
+// encodeContexts marshals each version vector to JSON and base64-encodes it for transport in the
+// HTTP response.
+func encodeContexts(vvs map[string]crdt.VV) (map[string]string, error) {
+	contexts := make(map[string]string, len(vvs))
+	for k, vv := range vvs {
+		raw, err := json.Marshal(vv)
+		if err != nil {
+			return nil, err
+		}
+		contexts[k] = base64.StdEncoding.EncodeToString(raw)
+	}
+	return contexts, nil
 }
 
 func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
@@ -369,20 +394,58 @@ func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if body.Add == "" && body.Remove == "" {
+	if len(body.Add) == 0 && len(body.Remove) == 0 {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if body.Remove != "" {
-		// TODO parse client causal context from request body and pass it here
-		srv.store.RemoveSet(key, body.Remove, crdt.VV{})
-	}
-	if body.Add != "" {
-		// TODO parse client causal context from request body and pass it here
-		srv.store.AddSet(key, body.Add, crdt.VV{})
+	vvs := make(map[string]crdt.VV, len(body.Contexts))
+	for k, v := range body.Contexts {
+		raw, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var vv crdt.VV
+		err = json.Unmarshal(raw, &vv)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		vvs[k] = vv
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Removes run before adds so a request that targets the same element with both ends with the
+	// element re-added under a fresh dot, matching Riak's set semantics.
+	// vvs[v] returns the zero VV for elements without a client-supplied context, which is the
+	// correct "no observation" input for DVVSet.Update.
+	for _, v := range body.Remove {
+		srv.store.RemoveSet(key, v, vvs[v])
+	}
+	for _, v := range body.Add {
+		srv.store.AddSet(key, v, vvs[v])
+	}
+
+	values, serverVVs, _ := srv.store.GetSet(key)
+
+	if values == nil {
+		values = []string{}
+	}
+	contexts, err := encodeContexts(serverVVs)
+	if err != nil {
+		srv.logger.Error("failed to encode set contexts", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp := setResponseBody{
+		Values:   values,
+		Contexts: contexts,
+	}
+	e := json.NewEncoder(w)
+	err = e.Encode(resp)
+	if err != nil {
+		srv.logger.Error("failed to encode set value", "err", err)
+	}
 }
 
 func (srv *Server) postGossip(w http.ResponseWriter, r *http.Request) {

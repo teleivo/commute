@@ -1,5 +1,9 @@
 // Package crdt provides conflict-free replicated data types (CRDTs).
 //
+// None of the types in this package are safe for concurrent use; callers that share a CRDT
+// across goroutines must serialize access externally. The server store wraps each CRDT with a
+// mutex.
+//
 // See Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data Types].
 //
 // [A comprehensive study of Convergent and Commutative Replicated Data Types]: https://inria.hal.science/inria-00555588/document
@@ -238,6 +242,17 @@ func (or *ORSet) CausalContext(value string) VV {
 	return v.Join()
 }
 
+// CausalContexts returns a freshly allocated map of per-element causal contexts: one VV per
+// element this replica has observed. Useful for serving a full set read where the client wants
+// to echo each element's context back on a subsequent write.
+func (or *ORSet) CausalContexts() map[string]VV {
+	vvs := make(map[string]VV, len(or.state))
+	for k, v := range or.state {
+		vvs[k] = v.Join()
+	}
+	return vvs
+}
+
 // Contains reports whether value is in the set by inspecting its DVVSet siblings.
 func (or *ORSet) Contains(value string) bool {
 	state, added := or.state[value]
@@ -270,9 +285,9 @@ func (or *ORSet) Values() []string {
 func (or *ORSet) Add(value string, vv VV) {
 	state, ok := or.state[value]
 	if !ok {
-		state = NewDVVSet[bool](or.nodeID)
+		state = NewDVVSet[bool]()
 	}
-	state.Update(vv, true)
+	state.Update(or.nodeID, vv, true)
 	or.state[value] = state
 }
 
@@ -284,7 +299,7 @@ func (or *ORSet) Remove(value string, vv VV) {
 	if !added { // value was never added
 		return
 	}
-	state.Update(vv, false)
+	state.Update(or.nodeID, vv, false)
 }
 
 // Merge incorporates the state of other into or by syncing per-element DVVSets. Elements only in
@@ -293,7 +308,7 @@ func (or *ORSet) Remove(value string, vv VV) {
 func (or *ORSet) Merge(other *ORSet) {
 	for k, v := range other.state {
 		if _, ok := or.state[k]; !ok {
-			or.state[k] = v
+			or.state[k] = v.Clone()
 		} else {
 			or.state[k].Sync(other.state[k])
 		}

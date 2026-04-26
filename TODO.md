@@ -1,23 +1,22 @@
 # TODO
 
-* OR-Set: replace UUIDs with dotted version vectors, add client-side causal context to HTTP API
-  * fix ORSet with DVVSet: go through all test cases
-  * HTTP GET: return the element's opaque context alongside the value, i.e. base64(json(dvvset.Join()))
-    in a `"context"` JSON field (Riak-style X-Riak-Vclock equivalent)
-  * HTTP PUT: accept `"context"` from the request body, decode back to a VV, pass to OR-Set's
-    Add/Remove which call DVVSet.Update(vv, op)
-  * update readme and example
-    * remove duplicate Shapiro citation (opening + Acknowledgments)
-    * reword opening so it reflects that OR-Set follows the DVVSet paper, not Shapiro Spec 15
-    * map node index to port (e.g. "node 0 is :8080, node 1 is :8081, node 2 is :8082")
-    * mention gossip interval / add a `sleep` between curl write and curl read so the example
-      doesn't race
-    * optional: demonstrate concurrent add+remove converging to add (showcases observed-remove)
-  * final rewview then merge to main
+* OR-Set on DVVSet: final review then merge to main
+  * fix `DVVSet.Sync`: deep-copy entries adopted from `other` (mirrors the `ORSet.Merge` fix; the
+    `Clone` test guards exactly this property)
+  * tighten `postSet` lookup-after-write so a missing set surfaces explicitly instead of relying
+    on `Store.RemoveSet`'s lazy-create side effect
+  * defensive `UnmarshalJSON` on `DVVSet`/`ORSet`: re-init `state` if the wire has `null`
+  * validate or reject contexts whose keys are not in `add`/`remove`
 
-  * write less/equal (needed for anti-entropy, can defer until then)
-
-* CRDT Map (map[Key]CRDT, merge delegates per-key)
+* DVVSet: write `Less`/`Equal` (needed for anti-entropy and delta gossip, can defer until then)
+* CRDT Map (`map[Key]CRDT`, merge delegates per-key)
+* HTTP layer hardening
+  * `http.MaxBytesReader` on every handler that calls `io.ReadAll(r.Body)` (incl. `postSet`,
+    where `contexts` can be arbitrarily large)
+  * cap on max element string length in OR-Set Add/Remove
+  * cap on max number of Adds/Removes per request
+  * decide and document what valid causal-context base64 / JSON looks like (size, shape, and
+    bounds on `C(r)` so a malicious client can't wipe siblings via a bogus-high own-id counter)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 
 ## Phase 3 — Observability
