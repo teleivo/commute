@@ -100,40 +100,42 @@ func (st *Store) GetRegister(key string) (json.RawMessage, bool) {
 }
 
 // GetSet returns the values of the set for key, or false if it doesn't exist.
-func (st *Store) GetSet(key string) ([]string, bool) {
+func (st *Store) GetSet(key string) ([]string, map[string]crdt.VV, bool) {
 	st.muSets.RLock()
 	set, ok := st.sets[key]
 	if !ok {
 		st.muSets.RUnlock()
-		return nil, false
+		return nil, nil, false
 	}
 	value := set.Values()
+	vvs := set.CausalContexts()
 	st.muSets.RUnlock()
-	return value, true
+	return value, vvs, true
 }
 
-// AddSet adds a value to the set for key, creating it if it doesn't exist.
-func (st *Store) AddSet(key, value string) {
+// AddSet adds a value to the set for key with the given client causal context vv, creating the
+// set if it doesn't exist.
+func (st *Store) AddSet(key, value string, vv crdt.VV) {
 	st.muSets.Lock()
 	set, ok := st.sets[key]
 	if !ok {
-		set = crdt.NewORSet()
+		set = crdt.NewORSet(st.nodeID)
 		st.sets[key] = set
 	}
-	set.Add(value)
+	set.Add(value, vv)
 	st.muSets.Unlock()
 }
 
-// RemoveSet removes a value from the set for key, creating it if it doesn't exist.
-func (st *Store) RemoveSet(key, value string) {
+// RemoveSet removes a value from the set for key with the given client causal context vv. It is
+// a no-op if the set does not exist on this replica.
+func (st *Store) RemoveSet(key, value string, vv crdt.VV) {
 	st.muSets.Lock()
+	defer st.muSets.Unlock()
 	set, ok := st.sets[key]
 	if !ok {
-		set = crdt.NewORSet()
-		st.sets[key] = set
+		return
 	}
-	set.Remove(value)
-	st.muSets.Unlock()
+	set.Remove(value, vv)
 }
 
 // Merge incorporates the state from a gossip message into the store.
@@ -159,7 +161,7 @@ func (st *Store) Merge(msg Message) {
 	st.muSets.Lock()
 	for k, incoming := range msg.Sets {
 		if _, ok := st.sets[k]; !ok {
-			st.sets[k] = crdt.NewORSet()
+			st.sets[k] = crdt.NewORSet(st.nodeID)
 		}
 		st.sets[k].Merge(incoming)
 	}

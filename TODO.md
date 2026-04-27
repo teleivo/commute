@@ -1,7 +1,14 @@
 # TODO
 
-* OR-Set: replace UUIDs with dotted version vectors, add client-side causal context to HTTP API
-* CRDT Map (map[Key]CRDT, merge delegates per-key)
+* DVVSet: write `Less`/`Equal` (needed for anti-entropy and delta gossip, can defer until then)
+* CRDT Map (`map[Key]CRDT`, merge delegates per-key)
+* HTTP layer hardening
+  * `http.MaxBytesReader` on every handler that calls `io.ReadAll(r.Body)` (incl. `postSet`,
+    where `contexts` can be arbitrarily large)
+  * cap on max element string length in OR-Set Add/Remove
+  * cap on max number of Adds/Removes per request
+  * decide and document what valid causal-context base64 / JSON looks like (size, shape, and
+    bounds on `C(r)` so a malicious client can't wipe siblings via a bogus-high own-id counter)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 
 ## Phase 3 — Observability

@@ -1,17 +1,16 @@
 // Package crdt provides conflict-free replicated data types (CRDTs).
 //
+// None of the types in this package are safe for concurrent use; callers that share a CRDT
+// across goroutines must serialize access externally.
+//
 // See Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data Types].
 //
 // [A comprehensive study of Convergent and Commutative Replicated Data Types]: https://inria.hal.science/inria-00555588/document
 package crdt
 
 import (
-	"bytes"
 	"encoding/json"
-	"slices"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // NodeID uniquely identifies a node in the cluster.
@@ -215,39 +214,52 @@ func (lww *LWWRegister) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &lww.entry)
 }
 
-// ORSet is an observed-remove set. Each Add generates a globally unique tag (UUID); Remove captures
-// all tags currently associated with an element. An element is in the set if any of its tags have
-// not been removed. This means a concurrent Add and Remove of the same element results in the Add
-// winning, because the new tag was not observed by the Remove.
-//
-// The payload is a pair of maps (add, remove) from element to a list of unique tags, following
-// Shapiro et al. Specification 15. Merge takes the union of both maps, deduplicating tags.
+// ORSet is an observed-remove set. A remove affects only adds that are in its causal past, so a
+// remove concurrent with an add cannot hide that add: the element stays in the set.
 type ORSet struct {
-	add    map[string][]uuid.UUID
-	remove map[string][]uuid.UUID
+	nodeID NodeID
+	// state maps each element to its per-element DVVSet of add/remove markers (true = add, false = remove).
+	state map[string]*DVVSet[bool]
 }
 
-// NewORSet creates an empty OR-Set.
-func NewORSet() *ORSet {
+// NewORSet creates an empty OR-Set owned by the given node.
+func NewORSet(nodeID NodeID) *ORSet {
 	return &ORSet{
-		add:    make(map[string][]uuid.UUID),
-		remove: make(map[string][]uuid.UUID),
+		nodeID: nodeID,
+		state:  make(map[string]*DVVSet[bool]),
 	}
 }
 
-// Contains returns true if the element is in the set, i.e. it has at least one tag that has not
-// been removed.
+// CausalContext returns the version vector summarizing all add/remove events this replica has
+// observed for value. Pass it back as the vv argument to a subsequent Add or Remove so concurrent
+// ops from other replicas are detected correctly. Returns an empty VV if value is unknown here.
+func (or *ORSet) CausalContext(value string) VV {
+	v, ok := or.state[value]
+	if !ok {
+		return VV{}
+	}
+	return v.Join()
+}
+
+// CausalContexts returns a freshly allocated map of per-element causal contexts: one VV per
+// element this replica has observed. Useful when reading the entire set so each element's context
+// can later be passed back to Add or Remove.
+func (or *ORSet) CausalContexts() map[string]VV {
+	vvs := make(map[string]VV, len(or.state))
+	for k, v := range or.state {
+		vvs[k] = v.Join()
+	}
+	return vvs
+}
+
+// Contains reports whether value is in the set by inspecting its DVVSet siblings.
 func (or *ORSet) Contains(value string) bool {
-	add, added := or.add[value]
+	state, added := or.state[value]
 	if !added {
 		return false
 	}
-	remove, removed := or.remove[value]
-	if !removed {
-		return true
-	}
-	for _, v := range add {
-		if !slices.Contains(remove, v) {
+	for _, v := range state.Values() {
+		if v {
 			return true
 		}
 	}
@@ -255,11 +267,10 @@ func (or *ORSet) Contains(value string) bool {
 	return false
 }
 
-// Values returns all elements currently in the set, i.e. elements that have at least one tag that
-// has not been removed. The order of the returned slice is not guaranteed.
+// Values returns all elements currently in the set. Order is not specified.
 func (or *ORSet) Values() []string {
 	var values []string
-	for value := range or.add {
+	for value := range or.state {
 		if or.Contains(value) {
 			values = append(values, value)
 		}
@@ -267,53 +278,40 @@ func (or *ORSet) Values() []string {
 	return values
 }
 
-// Add inserts an element into the set with a fresh unique tag.
-func (or *ORSet) Add(value string) {
-	id := uuid.New()
-	add, ok := or.add[value]
-	if ok {
-		add = append(add, id)
-	} else {
-		add = []uuid.UUID{id}
+// Add records an add of value on this node by advancing value's DVVSet with an add marker. vv is
+// the causal context the caller observed (typically from a prior CausalContext); it determines
+// which existing siblings are causally observed and discarded by this add.
+func (or *ORSet) Add(value string, vv VV) {
+	state, ok := or.state[value]
+	if !ok {
+		state = NewDVVSet[bool]()
 	}
-	or.add[value] = add
+	state.Update(or.nodeID, vv, true)
+	or.state[value] = state
 }
 
-// Remove removes an element by capturing all of its currently observed tags.
-func (or *ORSet) Remove(value string) {
-	add, added := or.add[value]
-	if !added {
-		// TODO in U-set its a precondition that it has been added but not in OR-set is it? or still
-		// because remove does not generate an id so
+// Remove records a remove of value on this node by advancing value's DVVSet with a remove marker.
+// vv is the causal context the caller observed (typically from a prior CausalContext); add
+// siblings it covers are dropped, and concurrent adds it does not cover survive.
+// If value was never added it is a no-op: a lone remove-marker would be beaten by any concurrent
+// add anyway (OR-Set semantics favor add), so there is nothing worth tracking.
+func (or *ORSet) Remove(value string, vv VV) {
+	state, added := or.state[value]
+	if !added { // value was never added
 		return
 	}
-	or.remove[value] = slices.Concat(or.remove[value], add)
-	or.add[value] = []uuid.UUID{}
+	state.Update(or.nodeID, vv, false)
 }
 
-// Merge incorporates the state of other into or by taking the union of the add and remove maps,
-// deduplicating tags.
+// Merge incorporates the state of other into or by syncing per-element DVVSets. Elements only in
+// other are adopted as-is; elements in both are merged via DVVSet.Sync, which preserves causally
+// concurrent add/remove siblings.
 func (or *ORSet) Merge(other *ORSet) {
-	for k, v := range other.add {
-		if _, ok := or.add[k]; !ok {
-			or.add[k] = v
+	for k, v := range other.state {
+		if _, ok := or.state[k]; !ok {
+			or.state[k] = v.Clone()
 		} else {
-			or.add[k] = slices.Concat(or.add[k], v)
-			slices.SortFunc(or.add[k], func(a, b uuid.UUID) int {
-				return bytes.Compare(a[:], b[:])
-			})
-			or.add[k] = slices.Compact(or.add[k])
-		}
-	}
-	for k, v := range other.remove {
-		if _, ok := or.remove[k]; !ok {
-			or.remove[k] = v
-		} else {
-			or.remove[k] = slices.Concat(or.remove[k], v)
-			slices.SortFunc(or.remove[k], func(a, b uuid.UUID) int {
-				return bytes.Compare(a[:], b[:])
-			})
-			or.remove[k] = slices.Compact(or.remove[k])
+			or.state[k].Sync(other.state[k])
 		}
 	}
 }
@@ -323,25 +321,24 @@ func (or *ORSet) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	v := struct {
-		Add    map[string][]uuid.UUID `json:"add"`
-		Remove map[string][]uuid.UUID `json:"remove"`
+		State map[string]*DVVSet[bool] `json:"state"`
 	}{
-		Add:    or.add,
-		Remove: or.remove,
+		State: or.state,
 	}
 	return json.Marshal(v)
 }
 
 func (or *ORSet) UnmarshalJSON(data []byte) error {
 	var v struct {
-		Add    map[string][]uuid.UUID `json:"add"`
-		Remove map[string][]uuid.UUID `json:"remove"`
+		State map[string]*DVVSet[bool] `json:"state"`
 	}
 	err := json.Unmarshal(data, &v)
 	if err != nil {
 		return err
 	}
-	or.add = v.Add
-	or.remove = v.Remove
+	if v.State == nil {
+		v.State = make(map[string]*DVVSet[bool])
+	}
+	or.state = v.State
 	return nil
 }
