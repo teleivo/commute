@@ -235,7 +235,7 @@ func TestDVVSetEvent(t *testing.T) {
 		assert.EqualValues(t, d.state["b"].values, []string{"v2"})
 	})
 
-	t.Run("OtherIDEntryWithContextLessOrEqualIsUnchanged", func(t *testing.T) {
+	t.Run("OtherIDEntryWithContextLessThanCounterIsUnchanged", func(t *testing.T) {
 		// For i != r: counter becomes max(n, C(i)). Here C(a)=1 and n=3, so no change.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
@@ -251,7 +251,7 @@ func TestDVVSetEvent(t *testing.T) {
 		assert.EqualValues(t, d.state["b"].values, []string{"v2"})
 	})
 
-	t.Run("OtherIDEntryCounterBumpedByContextMax", func(t *testing.T) {
+	t.Run("OtherIDEntryCounterRaisedToContextWhenContextIsHigher", func(t *testing.T) {
 		// For i != r: if C(i) > n, bump n to C(i). Values are preserved.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
@@ -429,7 +429,7 @@ func TestDVVSetSync(t *testing.T) {
 		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
 	})
 
-	t.Run("HigherCounterTruncatesWhenLowSideHasExtraSiblings", func(t *testing.T) {
+	t.Run("HighCounterSideTruncatedWhenLowSideHasNoSiblings", func(t *testing.T) {
 		// Mirrors Erlang: sync([W,Z]) where W={a,1,[]}, Z={a,2,[v2,v1]}.
 		// Z has higher counter 2. W has counter 1 but no values, meaning W already
 		// knows about dot (a,1) and it was not kept. So merging drops v1 from Z.
