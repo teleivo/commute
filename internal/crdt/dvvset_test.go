@@ -451,10 +451,10 @@ func TestDVVSetSync(t *testing.T) {
 		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
 	})
 
-	t.Run("ConcurrentSiblingsOnSameIDFromBothSides", func(t *testing.T) {
-		// Both sides advanced a to counter 2, but kept different siblings:
-		// receiver: (a, 2, [v2a, v1]), other: (a, 2, [v2b, v1]).
-		// Counters equal, coverage equal (N-len = 0 both sides), keep either.
+	t.Run("MergeBranchEqualCounterEqualCoverage", func(t *testing.T) {
+		// Constructed state: not reachable via Update under unique node ids, since writes under
+		// id a only happen on replica a and that replica has a single timeline. Tests the merge
+		// formula directly: counters equal, coverage equal (N-len = 0 both sides), keep either.
 		// The Erlang merge returns L1 in the N1 >= N2 + coverage-equal branch.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
