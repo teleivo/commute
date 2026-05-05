@@ -119,7 +119,11 @@ curl localhost:8080/sets/fruits
 
 * Static membership: peers are configured at startup, no dynamic join/leave
 * Full-state gossip: every round sends the entire store, no delta optimization
-* No persistence: all state is in memory and lost on restart
+* No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
+  if all nodes are down at once the data is lost.
+* Trusted network, no Byzantine tolerance: gossip and the HTTP API are unauthenticated and peers
+  are assumed to follow the protocol. Anyone who can reach a node can forge contexts or corrupt
+  convergence.
 
 ## Acknowledgments
 
