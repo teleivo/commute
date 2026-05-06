@@ -49,14 +49,19 @@ func (g *GCounter) Value() uint64 {
 
 // Merge incorporates the state of other into g by taking the max of each node's counter.
 func (g *GCounter) Merge(other *GCounter) {
+	if other == nil {
+		return
+	}
 	for id, v := range other.counters {
 		g.counters[id] = max(g.counters[id], v)
 	}
 }
 
 // Increment adds n to this node's counter.
-func (g *GCounter) Increment(n uint64) {
-	g.counters[g.nodeID] += n
+func (g *GCounter) Increment(n uint64) GCounter {
+	return GCounter{counters: map[NodeID]uint64{
+		g.nodeID: g.counters[g.nodeID] + n,
+	}}
 }
 
 func (g *GCounter) MarshalJSON() ([]byte, error) {
@@ -111,13 +116,19 @@ func (pn *PNCounter) Merge(other *PNCounter) {
 }
 
 // Increment adds n to this node's positive counter.
-func (pn *PNCounter) Increment(n uint64) {
-	pn.inc.Increment(n)
+func (pn *PNCounter) Increment(n uint64) PNCounter {
+	inc := pn.inc.Increment(n)
+	return PNCounter{
+		inc: &inc,
+	}
 }
 
 // Decrement adds n to this node's negative counter.
-func (pn *PNCounter) Decrement(n uint64) {
-	pn.dec.Increment(n)
+func (pn *PNCounter) Decrement(n uint64) PNCounter {
+	dec := pn.dec.Increment(n)
+	return PNCounter{
+		dec: &dec,
+	}
 }
 
 func (pn *PNCounter) MarshalJSON() ([]byte, error) {

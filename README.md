@@ -118,7 +118,10 @@ curl localhost:8080/sets/fruits
 ## Limitations
 
 * Static membership: peers are configured at startup, no dynamic join/leave
-* Full-state gossip: every round sends the entire store, no delta optimization
+* Delta-state gossip: deltas are propagated using the delta-interval anti-entropy algorithm
+  (Algorithm 2) from Almeida et al.,
+  [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529), which satisfies the
+  causal delta-merging condition and is equivalent to a standard state-based CRDT.
 * No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
   if all nodes are down at once the data is lost.
 * Trusted network, no Byzantine tolerance: gossip and the HTTP API are unauthenticated and peers
@@ -129,6 +132,9 @@ curl localhost:8080/sets/fruits
 
 * Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data Types](https://inria.hal.science/inria-00555588/document). CRDT specifications this project implements.
 * Almeida et al., [Scalable and Accurate Causality Tracking for Eventually Consistent Stores](https://inria.hal.science/hal-01287733). DVVSet design used for causality tracking.
+* Almeida, Shoker & Baquero, [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529).
+  Delta-mutator framework and the delta-interval anti-entropy algorithm (Algorithm 2) used for
+  delta-state gossip.
 * Gonçalves & Almeida, [Dotted-Version-Vectors](https://github.com/ricardobcl/Dotted-Version-Vectors). Reference Erlang implementation of DVVSet used as a guide and test source.
 
 ## Disclaimer

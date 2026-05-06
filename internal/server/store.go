@@ -45,7 +45,8 @@ func (st *Store) IncrementCounter(key string, value uint64) {
 		counter = crdt.NewPNCounter(st.nodeID)
 		st.counters[key] = counter
 	}
-	counter.Increment(value)
+	d := counter.Increment(value)
+	counter.Merge(&d)
 	st.muCounters.Unlock()
 }
 
@@ -57,7 +58,8 @@ func (st *Store) DecrementCounter(key string, value uint64) {
 		counter = crdt.NewPNCounter(st.nodeID)
 		st.counters[key] = counter
 	}
-	counter.Decrement(value)
+	d := counter.Decrement(value)
+	counter.Merge(&d)
 	st.muCounters.Unlock()
 }
 

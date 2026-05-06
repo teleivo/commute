@@ -18,7 +18,8 @@ func TestPNCounterValue(t *testing.T) {
 		"IncrementOnly": {
 			setup: func(id NodeID) *PNCounter {
 				c := NewPNCounter(id)
-				c.Increment(5)
+				d := c.Increment(5)
+				c.Merge(&d)
 				return c
 			},
 			want: 5,
@@ -26,7 +27,8 @@ func TestPNCounterValue(t *testing.T) {
 		"DecrementOnly": {
 			setup: func(id NodeID) *PNCounter {
 				c := NewPNCounter(id)
-				c.Decrement(3)
+				d := c.Decrement(3)
+				c.Merge(&d)
 				return c
 			},
 			want: -3,
@@ -34,8 +36,10 @@ func TestPNCounterValue(t *testing.T) {
 		"IncrementAndDecrement": {
 			setup: func(id NodeID) *PNCounter {
 				c := NewPNCounter(id)
-				c.Increment(10)
-				c.Decrement(3)
+				d := c.Increment(10)
+				c.Merge(&d)
+				d = c.Decrement(3)
+				c.Merge(&d)
 				return c
 			},
 			want: 7,
@@ -43,8 +47,10 @@ func TestPNCounterValue(t *testing.T) {
 		"DecrementBelowZero": {
 			setup: func(id NodeID) *PNCounter {
 				c := NewPNCounter(id)
-				c.Increment(2)
-				c.Decrement(5)
+				d := c.Increment(2)
+				c.Merge(&d)
+				d = c.Decrement(5)
+				c.Merge(&d)
 				return c
 			},
 			want: -3,
@@ -75,7 +81,8 @@ func TestPNCounterMerge(t *testing.T) {
 			a: func() *PNCounter { return NewPNCounter("a") },
 			b: func() *PNCounter {
 				c := NewPNCounter("b")
-				c.Increment(5)
+				d := c.Increment(5)
+				c.Merge(&d)
 				return c
 			},
 			want: 5,
@@ -83,12 +90,14 @@ func TestPNCounterMerge(t *testing.T) {
 		"DisjointNodes": {
 			a: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(3)
+				d := c.Increment(3)
+				c.Merge(&d)
 				return c
 			},
 			b: func() *PNCounter {
 				c := NewPNCounter("b")
-				c.Increment(7)
+				d := c.Increment(7)
+				c.Merge(&d)
 				return c
 			},
 			want: 10,
@@ -96,14 +105,18 @@ func TestPNCounterMerge(t *testing.T) {
 		"BothIncrementAndDecrement": {
 			a: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(10)
-				c.Decrement(2)
+				d := c.Increment(10)
+				c.Merge(&d)
+				d = c.Decrement(2)
+				c.Merge(&d)
 				return c
 			},
 			b: func() *PNCounter {
 				c := NewPNCounter("b")
-				c.Increment(5)
-				c.Decrement(3)
+				d := c.Increment(5)
+				c.Merge(&d)
+				d = c.Decrement(3)
+				c.Merge(&d)
 				return c
 			},
 			want: 10,
@@ -111,14 +124,18 @@ func TestPNCounterMerge(t *testing.T) {
 		"OverlappingTakesMax": {
 			a: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(3)
-				c.Decrement(1)
+				d := c.Increment(3)
+				c.Merge(&d)
+				d = c.Decrement(1)
+				c.Merge(&d)
 				return c
 			},
 			b: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(5)
-				c.Decrement(2)
+				d := c.Increment(5)
+				c.Merge(&d)
+				d = c.Decrement(2)
+				c.Merge(&d)
 				return c
 			},
 			want: 3,
@@ -126,14 +143,18 @@ func TestPNCounterMerge(t *testing.T) {
 		"MergeSelf": {
 			a: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(5)
-				c.Decrement(2)
+				d := c.Increment(5)
+				c.Merge(&d)
+				d = c.Decrement(2)
+				c.Merge(&d)
 				return c
 			},
 			b: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(5)
-				c.Decrement(2)
+				d := c.Increment(5)
+				c.Merge(&d)
+				d = c.Decrement(2)
+				c.Merge(&d)
 				return c
 			},
 			want: 3,
@@ -141,17 +162,22 @@ func TestPNCounterMerge(t *testing.T) {
 		"ThreeNodesMergedPairwise": {
 			a: func() *PNCounter {
 				c := NewPNCounter("a")
-				c.Increment(2)
-				c.Decrement(1)
+				d := c.Increment(2)
+				c.Merge(&d)
+				d = c.Decrement(1)
+				c.Merge(&d)
 				return c
 			},
 			b: func() *PNCounter {
 				// Simulate b having already merged with c.
 				b := NewPNCounter("b")
-				b.Increment(4)
+				d := b.Increment(4)
+				b.Merge(&d)
 				c := NewPNCounter("c")
-				c.Increment(6)
-				c.Decrement(3)
+				d = c.Increment(6)
+				c.Merge(&d)
+				d = c.Decrement(3)
+				c.Merge(&d)
 				b.Merge(c)
 				return b
 			},
