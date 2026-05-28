@@ -18,7 +18,8 @@ func TestLWWRegisterValue(t *testing.T) {
 	t.Run("AfterSet", func(t *testing.T) {
 		r := NewLWWRegister("a", time.Now)
 
-		r.Set(json.RawMessage(`"hello"`))
+		d := r.Set(json.RawMessage(`"hello"`))
+		r.Merge(&d)
 
 		assert.EqualValues(t, string(r.Value()), `"hello"`)
 	})
@@ -30,8 +31,10 @@ func TestLWWRegisterValue(t *testing.T) {
 			return ts
 		})
 
-		r.Set(json.RawMessage(`"first"`))
-		r.Set(json.RawMessage(`"second"`))
+		d := r.Set(json.RawMessage(`"first"`))
+		r.Merge(&d)
+		d = r.Set(json.RawMessage(`"second"`))
+		r.Merge(&d)
 
 		assert.EqualValues(t, string(r.Value()), `"second"`)
 	})
@@ -43,9 +46,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 	t.Run("LaterTimestampWins", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
-		a.Set(json.RawMessage(`"old"`))
+		da := a.Set(json.RawMessage(`"old"`))
+		a.Merge(&da)
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
-		b.Set(json.RawMessage(`"new"`))
+		db := b.Set(json.RawMessage(`"new"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 
@@ -55,9 +60,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 	t.Run("EarlierTimestampLoses", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(2*time.Second)))
-		a.Set(json.RawMessage(`"winner"`))
+		da := a.Set(json.RawMessage(`"winner"`))
+		a.Merge(&da)
 		b := NewLWWRegister("b", fixedClock(base.Add(1*time.Second)))
-		b.Set(json.RawMessage(`"loser"`))
+		db := b.Set(json.RawMessage(`"loser"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 
@@ -68,9 +75,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		clock := fixedClock(base)
 		a := NewLWWRegister("a", clock)
-		a.Set(json.RawMessage(`"from-a"`))
+		da := a.Set(json.RawMessage(`"from-a"`))
+		a.Merge(&da)
 		b := NewLWWRegister("b", clock)
-		b.Set(json.RawMessage(`"from-b"`))
+		db := b.Set(json.RawMessage(`"from-b"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 
@@ -81,9 +90,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		clock := fixedClock(base)
 		a := NewLWWRegister("z", clock)
-		a.Set(json.RawMessage(`"from-z"`))
+		da := a.Set(json.RawMessage(`"from-z"`))
+		a.Merge(&da)
 		b := NewLWWRegister("a", clock)
-		b.Set(json.RawMessage(`"from-a"`))
+		db := b.Set(json.RawMessage(`"from-a"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 
@@ -94,7 +105,8 @@ func TestLWWRegisterMerge(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base))
 		b := NewLWWRegister("b", fixedClock(base))
-		b.Set(json.RawMessage(`"hello"`))
+		db := b.Set(json.RawMessage(`"hello"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 
@@ -104,7 +116,8 @@ func TestLWWRegisterMerge(t *testing.T) {
 	t.Run("MergeSelf", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base))
-		a.Set(json.RawMessage(`"hello"`))
+		da := a.Set(json.RawMessage(`"hello"`))
+		a.Merge(&da)
 
 		a.Merge(a)
 
@@ -114,16 +127,20 @@ func TestLWWRegisterMerge(t *testing.T) {
 	t.Run("MergeIsCommutative", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
-		a.Set(json.RawMessage(`"from-a"`))
+		da := a.Set(json.RawMessage(`"from-a"`))
+		a.Merge(&da)
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
-		b.Set(json.RawMessage(`"from-b"`))
+		db := b.Set(json.RawMessage(`"from-b"`))
+		b.Merge(&db)
 
 		ab := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
-		ab.Set(json.RawMessage(`"from-a"`))
+		dab := ab.Set(json.RawMessage(`"from-a"`))
+		ab.Merge(&dab)
 		ab.Merge(b)
 
 		ba := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
-		ba.Set(json.RawMessage(`"from-b"`))
+		dba := ba.Set(json.RawMessage(`"from-b"`))
+		ba.Merge(&dba)
 		ba.Merge(a)
 
 		assert.EqualValues(t, string(ab.Value()), string(ba.Value()))
@@ -138,8 +155,10 @@ func TestLWWRegisterMerge(t *testing.T) {
 		// Node a and b both set at t=1s, b wins tiebreak (b > a).
 		tsA = base.Add(1 * time.Second)
 		tsB = base.Add(1 * time.Second)
-		a.Set(json.RawMessage(`"from-a"`))
-		b.Set(json.RawMessage(`"from-b"`))
+		da := a.Set(json.RawMessage(`"from-a"`))
+		a.Merge(&da)
+		db := b.Set(json.RawMessage(`"from-b"`))
+		b.Merge(&db)
 
 		// After merge, a's entry has writerID "b".
 		a.Merge(b)
@@ -148,7 +167,8 @@ func TestLWWRegisterMerge(t *testing.T) {
 		// Node a sets again at a later time. The writerID should be
 		// "a", not the merged "b".
 		tsA = base.Add(2 * time.Second)
-		a.Set(json.RawMessage(`"from-a-again"`))
+		da = a.Set(json.RawMessage(`"from-a-again"`))
+		a.Merge(&da)
 
 		// a's value should propagate since it has a later timestamp.
 		b.Merge(a)
@@ -158,8 +178,10 @@ func TestLWWRegisterMerge(t *testing.T) {
 		// so b's value should win.
 		tsA = base.Add(3 * time.Second)
 		tsB = base.Add(3 * time.Second)
-		a.Set(json.RawMessage(`"tie-a"`))
-		b.Set(json.RawMessage(`"tie-b"`))
+		da = a.Set(json.RawMessage(`"tie-a"`))
+		a.Merge(&da)
+		db = b.Set(json.RawMessage(`"tie-b"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 		assert.EqualValues(t, string(a.Value()), `"tie-b"`)
@@ -168,9 +190,11 @@ func TestLWWRegisterMerge(t *testing.T) {
 	t.Run("MergeIsIdempotent", func(t *testing.T) {
 		t.Parallel()
 		a := NewLWWRegister("a", fixedClock(base.Add(1*time.Second)))
-		a.Set(json.RawMessage(`"hello"`))
+		da := a.Set(json.RawMessage(`"hello"`))
+		a.Merge(&da)
 		b := NewLWWRegister("b", fixedClock(base.Add(2*time.Second)))
-		b.Set(json.RawMessage(`"world"`))
+		db := b.Set(json.RawMessage(`"world"`))
+		b.Merge(&db)
 
 		a.Merge(b)
 		first := string(a.Value())
@@ -180,6 +204,53 @@ func TestLWWRegisterMerge(t *testing.T) {
 
 		assert.EqualValues(t, first, second)
 	})
+}
+
+func TestLWWRegisterIsLessOrEqual(t *testing.T) {
+	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	tests := map[string]struct {
+		lww   *LWWRegister
+		other *LWWRegister
+		want  bool
+	}{
+		"OlderTimestamp": {
+			lww:   &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			other: &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t2, Value: []byte(`"y"`)}},
+			want:  true,
+		},
+		"SameTimestampLowerWriterID": {
+			lww:   &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			other: &LWWRegister{entry: lwwEntry{WriterID: "b", Timestamp: t1, Value: []byte(`"y"`)}},
+			want:  true,
+		},
+		"EqualState": {
+			lww:   &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			other: &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			want:  true,
+		},
+		"SameTimestampHigherWriterID": {
+			lww:   &LWWRegister{entry: lwwEntry{WriterID: "b", Timestamp: t1, Value: []byte(`"y"`)}},
+			other: &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			want:  false,
+		},
+		"NewerTimestamp": {
+			lww:   &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t2, Value: []byte(`"y"`)}},
+			other: &LWWRegister{entry: lwwEntry{WriterID: "a", Timestamp: t1, Value: []byte(`"x"`)}},
+			want:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tc.lww.IsLessOrEqual(tc.other)
+
+			assert.EqualValues(t, got, tc.want)
+		})
+	}
 }
 
 func fixedClock(t time.Time) Clock {

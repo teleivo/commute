@@ -11,7 +11,7 @@ detect concurrent operations precisely and clients can supply a causal context o
 * PN-Counter (increment and decrement)
 * LWW-Register (last-writer-wins, stores any JSON value)
 * OR-Set (observed-remove set with per-element causal contexts, stores strings)
-* Full-state gossip to a random peer on a configurable interval (default 5s)
+* Delta-state gossip to a random peer on a configurable interval (default 5s)
 
 ## Run
 
@@ -27,10 +27,9 @@ Start a 3-node cluster. Each container listens on `:8080`; the host maps a uniqu
 docker compose up --build
 ```
 
-The examples below write on one node and read from another. Allow at least one gossip round (5s
-by default) for state to propagate before reading; otherwise the second node may still return
-404 or stale state. Gossip pushes state to one random peer per round, so a specific node may
-need several rounds before it sees an update; rerun the read step if it returns stale state.
+The examples below write on one node and read from another. Each gossip round pushes state to one
+random peer, so a specific node may need several rounds before it sees an update. If a read returns
+404 or stale state, wait a few seconds and retry.
 
 ### Counter
 
@@ -118,14 +117,38 @@ curl localhost:8080/sets/fruits
 ## Limitations
 
 * Static membership: peers are configured at startup, no dynamic join/leave
-* Full-state gossip: every round sends the entire store, no delta optimization
-* No persistence: all state is in memory and lost on restart
+* Delta-state gossip: deltas are propagated using the delta-interval anti-entropy algorithm
+  (Algorithm 2) from Almeida et al.,
+  [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529), which satisfies the
+  causal delta-merging condition and is equivalent to a standard state-based CRDT. Enes et al.,
+  [Efficient Synchronization of State-based CRDTs](https://arxiv.org/abs/1803.02750), show that
+  this classic algorithm can propagate as much redundant state as full state-based synchronization,
+  performing no better and incurring unnecessary CPU overhead. Two optimizations address this: BP
+  (avoid back-propagating received deltas to their origin) and RR (strip already-seen
+  join-irreducible states from received delta-groups using join decomposition). Neither is
+  implemented here.
+* No delta garbage collection: the delta buffer grows unboundedly; it will be garbage collected
+  once dynamic membership (SWIM) is in place, since GC requires knowing which peers have left for
+  good vs. are temporarily partitioned.
+* No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
+  if all nodes are down at once the data is lost.
+* Trusted network, no Byzantine tolerance: gossip and the HTTP API are unauthenticated and peers
+  are assumed to follow the protocol. Anyone who can reach a node can forge contexts or corrupt
+  convergence.
 
 ## Acknowledgments
 
-* Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data Types](https://inria.hal.science/inria-00555588/document). CRDT specifications this project implements.
-* Almeida et al., [Scalable and Accurate Causality Tracking for Eventually Consistent Stores](https://inria.hal.science/hal-01287733). DVVSet design used for causality tracking.
-* Gonçalves & Almeida, [Dotted-Version-Vectors](https://github.com/ricardobcl/Dotted-Version-Vectors). Reference Erlang implementation of DVVSet used as a guide and test source.
+* Shapiro et al., [A comprehensive study of Convergent and Commutative Replicated Data
+Types](https://inria.hal.science/inria-00555588/document). CRDT specifications this project
+implements.
+* Almeida et al., [Scalable and Accurate Causality Tracking for Eventually Consistent
+Stores](https://inria.hal.science/hal-01287733). DVVSet design used for causality tracking.
+* Almeida, Shoker & Baquero, [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529).
+Delta-mutator framework and the delta-interval anti-entropy algorithm (Algorithm 2) used for
+delta-state gossip.
+* Gonçalves & Almeida,
+[Dotted-Version-Vectors](https://github.com/ricardobcl/Dotted-Version-Vectors). Reference Erlang
+implementation of DVVSet used as a guide and test source.
 
 ## Disclaimer
 

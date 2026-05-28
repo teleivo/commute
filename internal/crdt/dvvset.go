@@ -49,26 +49,6 @@ func (e *dvvEntry[T]) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// NewDVVSet creates an empty DVVSet. DVVSet is pure causal state; the owning replica's id is
-// passed per call to Event/Update rather than stored on the struct.
-func NewDVVSet[T any]() *DVVSet[T] {
-	return &DVVSet[T]{
-		state: make(map[NodeID]dvvEntry[T]),
-	}
-}
-
-// Clone returns a deep copy of ds. The state map and each entry's siblings slice are newly
-// allocated, so the copy can be mutated independently. If T is a reference type (pointer, slice,
-// map, or contains one), element values themselves are shared: Clone does not recurse into T.
-// This is sufficient for ORSet's DVVSet[bool] since bool is not a reference type.
-func (ds *DVVSet[T]) Clone() *DVVSet[T] {
-	s := make(map[NodeID]dvvEntry[T], len(ds.state))
-	for k, v := range ds.state {
-		s[k] = dvvEntry[T]{counter: v.counter, values: slices.Clone(v.values)}
-	}
-	return &DVVSet[T]{state: s}
-}
-
 // VV is a version vector: a mapping from node id to the highest counter known for that node.
 type VV map[NodeID]uint64
 
@@ -79,6 +59,14 @@ func (vv VV) get(nodeID NodeID) uint64 {
 		return v
 	}
 	return 0
+}
+
+// NewDVVSet creates an empty DVVSet. DVVSet is pure causal state; the owning replica's id is
+// passed per call to Event/Update rather than stored on the struct.
+func NewDVVSet[T any]() *DVVSet[T] {
+	return &DVVSet[T]{
+		state: make(map[NodeID]dvvEntry[T]),
+	}
 }
 
 // Values returns all siblings in the DVVSet. The order is not specified.
@@ -100,6 +88,18 @@ func (ds *DVVSet[T]) Join() VV {
 		result[k] = v.counter
 	}
 	return result
+}
+
+// Clone returns a deep copy of ds. The state map and each entry's siblings slice are newly
+// allocated, so the copy can be mutated independently. If T is a reference type (pointer, slice,
+// map, or contains one), element values themselves are shared: Clone does not recurse into T.
+// This is sufficient for ORSet's DVVSet[bool] since bool is not a reference type.
+func (ds *DVVSet[T]) Clone() *DVVSet[T] {
+	s := make(map[NodeID]dvvEntry[T], len(ds.state))
+	for k, v := range ds.state {
+		s[k] = dvvEntry[T]{counter: v.counter, values: slices.Clone(v.values)}
+	}
+	return &DVVSet[T]{state: s}
 }
 
 // discard drops siblings from ds whose dots are covered by the given version vector vv. For each
@@ -150,6 +150,15 @@ func (ds *DVVSet[T]) event(nodeID NodeID, vv VV, value T) {
 	}
 }
 
+// Update serves a put against ds coordinated by the replica identified by nodeID with the given
+// causal context vv and new value: it drops siblings vv already knows about, then generates a
+// fresh dot for value on that replica. This is the put flow from paper §6.2: discard obsolete
+// versions, then event to record the new one.
+func (ds *DVVSet[T]) Update(nodeID NodeID, vv VV, value T) {
+	ds.discard(vv)
+	ds.event(nodeID, vv, value)
+}
+
 // Sync merges the causal history of other into ds, keeping only siblings neither side has
 // obsoleted. An id on one side only is kept as-is (the absent side is implicitly (i, 0, [])). An
 // id on both sides takes the higher counter and truncates that side's siblings via merge:
@@ -192,13 +201,21 @@ func (ds *DVVSet[T]) Sync(other *DVVSet[T]) {
 	}
 }
 
-// Update serves a put against ds coordinated by the replica identified by nodeID with the given
-// causal context vv and new value: it drops siblings vv already knows about, then generates a
-// fresh dot for value on that replica. This is the put flow from paper §6.2: discard obsolete
-// versions, then event to record the new one.
-func (ds *DVVSet[T]) Update(nodeID NodeID, vv VV, value T) {
-	ds.discard(vv)
-	ds.event(nodeID, vv, value)
+// IsLessOrEqual reports whether ds's causal history is subsumed by other's, i.e. ds ⊑ other.
+// Per the partial order on DVVSets from Almeida et al., [Scalable and Accurate Causality Tracking
+// for Eventually Consistent Stores] §5.2, this holds iff for every entry in ds, other's counter
+// for that node is at least as large. Nodes absent from other have an implicit counter of 0, so
+// any non-zero entry in ds with a missing entry in other means ds ⊄ other. Sibling values are not
+// compared; only the causal history (counters) matters:
+//
+//	ds ⊑ other ⟺ ∀(i, n, _) ∈ ds. n ≤ other(i)
+func (ds *DVVSet[T]) IsLessOrEqual(other DVVSet[T]) bool {
+	for id, v := range ds.state {
+		if v.counter > other.state[id].counter {
+			return false
+		}
+	}
+	return true
 }
 
 // MarshalJSON serializes ds's replicated state. Owning-replica identity is not part of the wire

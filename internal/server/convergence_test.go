@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,183 +20,6 @@ import (
 	"github.com/teleivo/assertive/require"
 	"github.com/teleivo/commute/internal/server"
 )
-
-// cluster manages a group of nodes for testing. It implements http.RoundTripper
-// to route gossip requests to the right node's ServeHTTP in-process, avoiding
-// real network I/O.
-type cluster struct {
-	t      *testing.T
-	nodes  []*server.Server
-	routes map[string]*server.Server
-}
-
-func (c *cluster) RoundTrip(req *http.Request) (*http.Response, error) {
-	node, ok := c.routes[req.URL.Host]
-	if !ok {
-		return nil, fmt.Errorf("no node for host %q", req.URL.Host)
-	}
-	rec := httptest.NewRecorder()
-	node.ServeHTTP(rec, req)
-	return rec.Result(), nil
-}
-
-func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
-	t.Helper()
-
-	addrs := make([]string, n)
-	for i := range n {
-		addrs[i] = fmt.Sprintf("127.0.0.1:%d", 10000+i)
-	}
-
-	c := &cluster{
-		t:      t,
-		nodes:  make([]*server.Server, n),
-		routes: make(map[string]*server.Server, n),
-	}
-	client := &http.Client{Transport: c}
-	for i := range n {
-		peers := make([]string, 0, n-1)
-		for j := range n {
-			if i != j {
-				peers = append(peers, addrs[j])
-			}
-		}
-		cfg := server.Config{
-			NodeID:         fmt.Sprintf("node-%d", i),
-			Peers:          strings.Join(peers, ","),
-			GossipInterval: 1 * time.Second,
-			Client:         client,
-			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
-			Stderr:         io.Discard,
-		}
-		if i < len(clocks) {
-			cfg.Clock = clocks[i]
-		}
-		srv, err := server.New(cfg)
-		require.NoError(t, err)
-		c.nodes[i] = srv
-		c.routes[addrs[i]] = srv
-	}
-
-	return c
-}
-
-func (c *cluster) startGossip(ctx context.Context) {
-	c.t.Helper()
-	for _, node := range c.nodes {
-		go node.StartGossip(ctx)
-	}
-}
-
-func (c *cluster) increment(node int, key string, value uint64) {
-	c.t.Helper()
-	body := fmt.Sprintf(`{"increment": %d}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	assert.EqualValues(c.t, rec.Code, http.StatusOK)
-}
-
-func (c *cluster) decrement(node int, key string, value uint64) {
-	c.t.Helper()
-	body := fmt.Sprintf(`{"decrement": %d}`, value)
-	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	assert.EqualValues(c.t, rec.Code, http.StatusOK)
-}
-
-func (c *cluster) getValue(node int, key string) int64 {
-	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/counters/"+key, nil)
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	if rec.Code == http.StatusNotFound {
-		return 0
-	}
-	require.EqualValues(c.t, rec.Code, http.StatusOK)
-	var resp map[string]any
-	err := json.NewDecoder(rec.Body).Decode(&resp)
-	require.NoError(c.t, err)
-	return int64(resp["value"].(float64))
-}
-
-func (c *cluster) postSet(node int, key string, body setRequest) setResponse {
-	c.t.Helper()
-	raw, err := json.Marshal(body)
-	require.NoError(c.t, err)
-	req := httptest.NewRequest(http.MethodPost, "/sets/"+key, bytes.NewReader(raw))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	require.EqualValues(c.t, rec.Code, http.StatusOK)
-	var resp setResponse
-	err = json.NewDecoder(rec.Body).Decode(&resp)
-	require.NoError(c.t, err)
-	return resp
-}
-
-func (c *cluster) addToSet(node int, key, value string) setResponse {
-	c.t.Helper()
-	return c.postSet(node, key, setRequest{Add: []string{value}})
-}
-
-func (c *cluster) removeFromSet(node int, key, value string, contexts map[string]string) setResponse {
-	c.t.Helper()
-	return c.postSet(node, key, setRequest{Remove: []string{value}, Contexts: contexts})
-}
-
-func (c *cluster) getSet(node int, key string) setResponse {
-	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/sets/"+key, nil)
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	if rec.Code == http.StatusNotFound {
-		return setResponse{}
-	}
-	require.EqualValues(c.t, rec.Code, http.StatusOK)
-	var resp setResponse
-	err := json.NewDecoder(rec.Body).Decode(&resp)
-	require.NoError(c.t, err)
-	return resp
-}
-
-func (c *cluster) getSetValues(node int, key string) []string {
-	c.t.Helper()
-	resp := c.getSet(node, key)
-	if resp.Values == nil {
-		return nil
-	}
-	slices.Sort(resp.Values)
-	return resp.Values
-}
-
-func (c *cluster) setRegister(node int, key, value string) {
-	c.t.Helper()
-	body := fmt.Sprintf(`{"value": %q}`, value)
-	req := httptest.NewRequest(http.MethodPut, "/registers/"+key, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	assert.EqualValues(c.t, rec.Code, http.StatusOK)
-}
-
-func (c *cluster) getRegister(node int, key string) string {
-	c.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/registers/"+key, nil)
-	rec := httptest.NewRecorder()
-	c.nodes[node].ServeHTTP(rec, req)
-	if rec.Code == http.StatusNotFound {
-		return ""
-	}
-	require.EqualValues(c.t, rec.Code, http.StatusOK)
-	var resp map[string]any
-	err := json.NewDecoder(rec.Body).Decode(&resp)
-	require.NoError(c.t, err)
-	return resp["value"].(string)
-}
 
 func TestCounterConvergence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -575,4 +399,245 @@ func TestSetConvergenceRemoveDoesNotDropConcurrentAdd(t *testing.T) {
 		assert.EqualValues(t, c.getSetValues(1, "fruits"), []string{"apple"})
 		assert.EqualValues(t, c.getSetValues(2, "fruits"), []string{"apple"})
 	})
+}
+
+// TestCounterConvergenceCrashRecoveryGap documents a known bug: a node that crashes and restarts
+// loses all volatile state (store + ack map). Its peers still hold a stale ack seq for it and
+// will not send anything new since they believe it is already caught up, skipping all the history
+// the restarted node needs.
+func TestCounterConvergenceCrashRecoveryGap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 2)
+		c.startGossip(t.Context())
+
+		// Node 1 writes, both nodes converge. Node 0 acks node 1's delta, so node 1 records
+		// that node 0 is fully caught up.
+		c.increment(1, "score", 15)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "score"), int64(15))
+		assert.EqualValues(t, c.getValue(1, "score"), int64(15))
+
+		// Node 0 "crashes": replaced by a fresh server with empty store and ack map.
+		// Node 1's ack map still records the pre-crash seq for node 0, so it considers
+		// node 0 fully caught up and Delta("node-0") returns ok=false.
+		c.restart(t.Context(), 0)
+
+		// No new writes: node 1 has nothing new to send since its seq has not advanced past
+		// what it thinks node 0 already acked. Node 0 stays empty forever.
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "score"), int64(0)) // bug: should be 15
+		assert.EqualValues(t, c.getValue(1, "score"), int64(15))
+	})
+}
+
+// cluster manages a group of nodes for testing. It implements http.RoundTripper
+// to route gossip requests to the right node's ServeHTTP in-process, avoiding
+// real network I/O.
+type cluster struct {
+	t       *testing.T
+	nodes   []*server.Server
+	routes  map[string]*server.Server
+	addrs   []string
+	configs []server.Config
+}
+
+func (c *cluster) RoundTrip(req *http.Request) (*http.Response, error) {
+	node, ok := c.routes[req.URL.Host]
+	if !ok {
+		return nil, fmt.Errorf("no node for host %q", req.URL.Host)
+	}
+	rec := httptest.NewRecorder()
+	node.ServeHTTP(rec, req)
+	return rec.Result(), nil
+}
+
+func (c *cluster) startGossip(ctx context.Context) {
+	c.t.Helper()
+	for _, node := range c.nodes {
+		go node.StartGossip(ctx)
+	}
+}
+
+// restart replaces node i with a fresh server: same nodeID, address and peers, but an empty
+// store and ack map, simulating a crash and restart. Starts the gossip loop for the new node.
+func (c *cluster) restart(ctx context.Context, i int) {
+	c.t.Helper()
+	cfg := c.configs[i]
+	cfg.Rng = rand.New(rand.NewPCG(uint64(i), 0))
+	srv, err := server.New(cfg)
+	require.NoError(c.t, err)
+	c.nodes[i] = srv
+	c.routes[c.addrs[i]] = srv
+	go srv.StartGossip(ctx)
+}
+
+func (c *cluster) increment(node int, key string, value uint64) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"increment": %d}`, value)
+	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) decrement(node int, key string, value uint64) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"decrement": %d}`, value)
+	req := httptest.NewRequest(http.MethodPost, "/counters/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) getValue(node int, key string) int64 {
+	c.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/counters/"+key, nil)
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		return 0
+	}
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	return int64(resp["value"].(float64))
+}
+
+func (c *cluster) postSet(node int, key string, body setRequest) setResponse {
+	c.t.Helper()
+	raw, err := json.Marshal(body)
+	require.NoError(c.t, err)
+	req := httptest.NewRequest(http.MethodPost, "/sets/"+key, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp setResponse
+	err = json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	return resp
+}
+
+func (c *cluster) addToSet(node int, key, value string) setResponse {
+	c.t.Helper()
+	return c.postSet(node, key, setRequest{Add: []string{value}})
+}
+
+func (c *cluster) removeFromSet(node int, key, value string, contexts map[string]string) setResponse {
+	c.t.Helper()
+	return c.postSet(node, key, setRequest{Remove: []string{value}, Contexts: contexts})
+}
+
+func (c *cluster) getSet(node int, key string) setResponse {
+	c.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/sets/"+key, nil)
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		return setResponse{}
+	}
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp setResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	return resp
+}
+
+func (c *cluster) getSetValues(node int, key string) []string {
+	c.t.Helper()
+	resp := c.getSet(node, key)
+	if resp.Values == nil {
+		return nil
+	}
+	slices.Sort(resp.Values)
+	return resp.Values
+}
+
+func (c *cluster) setRegister(node int, key, value string) {
+	c.t.Helper()
+	body := fmt.Sprintf(`{"value": %q}`, value)
+	req := httptest.NewRequest(http.MethodPut, "/registers/"+key, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	assert.EqualValues(c.t, rec.Code, http.StatusOK)
+}
+
+func (c *cluster) getRegister(node int, key string) string {
+	c.t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/registers/"+key, nil)
+	rec := httptest.NewRecorder()
+	c.nodes[node].ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		return ""
+	}
+	require.EqualValues(c.t, rec.Code, http.StatusOK)
+	var resp map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(c.t, err)
+	return resp["value"].(string)
+}
+
+type fakeListener struct {
+	addr *net.TCPAddr
+}
+
+func (l fakeListener) Accept() (net.Conn, error) { return nil, nil }
+func (l fakeListener) Close() error              { return nil }
+func (l fakeListener) Addr() net.Addr            { return l.addr }
+
+func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
+	t.Helper()
+
+	addrs := make([]string, n)
+	for i := range n {
+		addrs[i] = fmt.Sprintf("127.0.0.1:%d", 10000+i)
+	}
+
+	c := &cluster{
+		t:       t,
+		nodes:   make([]*server.Server, n),
+		routes:  make(map[string]*server.Server, n),
+		addrs:   addrs,
+		configs: make([]server.Config, n),
+	}
+	client := &http.Client{Transport: c}
+	for i := range n {
+		peers := make([]string, 0, n-1)
+		for j := range n {
+			if i != j {
+				peers = append(peers, addrs[j])
+			}
+		}
+		tcpAddr, err := net.ResolveTCPAddr("tcp", addrs[i])
+		require.NoError(t, err)
+		cfg := server.Config{
+			NodeID:         fmt.Sprintf("node-%d", i),
+			Listener:       fakeListener{tcpAddr},
+			AdvertiseAddr:  addrs[i],
+			Peers:          strings.Join(peers, ","),
+			GossipInterval: 1 * time.Second,
+			Client:         client,
+			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
+			Stderr:         io.Discard,
+		}
+		if i < len(clocks) {
+			cfg.Clock = clocks[i]
+		}
+		srv, err := server.New(cfg)
+		require.NoError(t, err)
+		c.nodes[i] = srv
+		c.routes[addrs[i]] = srv
+		c.configs[i] = cfg
+	}
+
+	return c
 }

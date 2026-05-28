@@ -18,14 +18,17 @@ func TestORSetContains(t *testing.T) {
 	t.Run("AddRemoveAddLifecycle", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
 		assert.True(t, s.Contains("apple"))
 		assert.False(t, s.Contains("banana"))
 
-		s.Remove("apple", s.CausalContext("apple"))
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 		assert.False(t, s.Contains("apple"))
 
-		s.Add("apple", s.CausalContext("apple"))
+		d = s.Add("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 		assert.True(t, s.Contains("apple"))
 	})
 
@@ -34,8 +37,10 @@ func TestORSetContains(t *testing.T) {
 		// semantics the remove is concurrent with the add and the add survives.
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Remove("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", VV{})
+		s.Merge(&d)
 
 		assert.True(t, s.Contains("apple"))
 	})
@@ -43,9 +48,12 @@ func TestORSetContains(t *testing.T) {
 	t.Run("RemoveOnlyAffectsTarget", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("banana", VV{})
-		s.Remove("apple", s.CausalContext("apple"))
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("banana", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 
 		assert.False(t, s.Contains("apple"))
 		assert.True(t, s.Contains("banana"))
@@ -54,7 +62,8 @@ func TestORSetContains(t *testing.T) {
 	t.Run("RemoveNonExistentIsNoOp", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Remove("apple", VV{})
+		d := s.Remove("apple", VV{})
+		s.Merge(&d)
 
 		assert.False(t, s.Contains("apple"))
 	})
@@ -63,9 +72,12 @@ func TestORSetContains(t *testing.T) {
 		// Removing twice with the observed context has the same effect as removing once.
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Remove("apple", s.CausalContext("apple"))
-		s.Remove("apple", s.CausalContext("apple"))
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 
 		assert.False(t, s.Contains("apple"))
 	})
@@ -73,9 +85,12 @@ func TestORSetContains(t *testing.T) {
 	t.Run("MultipleElements", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("banana", VV{})
-		s.Add("cherry", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("banana", VV{})
+		s.Merge(&d)
+		d = s.Add("cherry", VV{})
+		s.Merge(&d)
 
 		assert.True(t, s.Contains("apple"))
 		assert.True(t, s.Contains("banana"))
@@ -87,8 +102,10 @@ func TestORSetContains(t *testing.T) {
 		// Adding twice with empty context creates two concurrent add siblings; element is present.
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("apple", VV{})
+		s.Merge(&d)
 
 		assert.True(t, s.Contains("apple"))
 	})
@@ -104,7 +121,8 @@ func TestORSetCausalContext(t *testing.T) {
 	t.Run("AfterOneAddContainsOwnDot", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
 
 		assert.EqualValues(t, s.CausalContext("apple"), VV{"a": 1})
 	})
@@ -112,7 +130,8 @@ func TestORSetCausalContext(t *testing.T) {
 	t.Run("AfterMergeIncludesOtherReplicaDot", func(t *testing.T) {
 		// Replica a adds apple; b merges and then reads the context. b should see a's dot.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 		b.Merge(a)
 
@@ -135,7 +154,8 @@ func TestORSetMerge(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
 		b := NewORSet("b")
-		b.Add("apple", VV{})
+		d := b.Add("apple", VV{})
+		b.Merge(&d)
 
 		a.Merge(b)
 
@@ -145,7 +165,8 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("MergeFromEmpty", func(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 
 		a.Merge(b)
@@ -156,9 +177,11 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("DisjointElements", func(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
-		b.Add("banana", VV{})
+		d = b.Add("banana", VV{})
+		b.Merge(&d)
 
 		a.Merge(b)
 
@@ -169,9 +192,11 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("SameElementFromTwoReplicas", func(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
-		b.Add("apple", VV{})
+		d = b.Add("apple", VV{})
+		b.Merge(&d)
 
 		a.Merge(b)
 
@@ -181,9 +206,11 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("MergeIsIdempotent", func(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
-		b.Add("banana", VV{})
+		d = b.Add("banana", VV{})
+		b.Merge(&d)
 
 		a.Merge(b)
 		a.Merge(b)
@@ -195,13 +222,17 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("MergeIsCommutative", func(t *testing.T) {
 		t.Parallel()
 		a1 := NewORSet("a")
-		a1.Add("apple", VV{})
+		d := a1.Add("apple", VV{})
+		a1.Merge(&d)
 		b1 := NewORSet("b")
-		b1.Add("banana", VV{})
+		d = b1.Add("banana", VV{})
+		b1.Merge(&d)
 		a2 := NewORSet("a")
-		a2.Add("apple", VV{})
+		d = a2.Add("apple", VV{})
+		a2.Merge(&d)
 		b2 := NewORSet("b")
-		b2.Add("banana", VV{})
+		d = b2.Add("banana", VV{})
+		b2.Merge(&d)
 
 		a1.Merge(b1)
 		b2.Merge(a2)
@@ -215,7 +246,8 @@ func TestORSetMerge(t *testing.T) {
 	t.Run("MergeSelf", func(t *testing.T) {
 		t.Parallel()
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 
 		a.Merge(a)
 
@@ -226,12 +258,15 @@ func TestORSetMerge(t *testing.T) {
 		t.Parallel()
 		// a adds apple and banana, b syncs, b removes apple with observed context, a syncs back.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
-		a.Add("banana", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
+		d = a.Add("banana", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 		b.Merge(a)
 
-		b.Remove("apple", b.CausalContext("apple"))
+		d = b.Remove("apple", b.CausalContext("apple"))
+		b.Merge(&d)
 		a.Merge(b)
 
 		assert.False(t, a.Contains("apple"))
@@ -245,12 +280,15 @@ func TestORSetMerge(t *testing.T) {
 		//   a re-adds apple (fresh dot, unknown to b)
 		// After merge, the concurrent add survives because b's remove did not observe it.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 		b.Merge(a)
 
-		b.Remove("apple", b.CausalContext("apple"))
-		a.Add("apple", a.CausalContext("apple"))
+		d = b.Remove("apple", b.CausalContext("apple"))
+		b.Merge(&d)
+		d = a.Add("apple", a.CausalContext("apple"))
+		a.Merge(&d)
 
 		a.Merge(b)
 		b.Merge(a)
@@ -266,14 +304,17 @@ func TestORSetMerge(t *testing.T) {
 		// their observed context. The add is obsolete on both sides; after merging all three,
 		// apple is gone.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 		b.Merge(a)
 		c := NewORSet("c")
 		c.Merge(a)
 
-		b.Remove("apple", b.CausalContext("apple"))
-		c.Remove("apple", c.CausalContext("apple"))
+		d = b.Remove("apple", b.CausalContext("apple"))
+		b.Merge(&d)
+		d = c.Remove("apple", c.CausalContext("apple"))
+		c.Merge(&d)
 
 		a.Merge(b)
 		a.Merge(c)
@@ -286,15 +327,145 @@ func TestORSetMerge(t *testing.T) {
 		// a and b independently add apple with empty context; their dots are distinct.
 		// After merge, both add siblings survive; element is present.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
-		b.Add("apple", VV{})
+		d = b.Add("apple", VV{})
+		b.Merge(&d)
 
 		a.Merge(b)
 
 		assert.True(t, a.Contains("apple"))
 		// And b's causal context seen from a after merge knows both dots.
 		assert.EqualValues(t, a.CausalContext("apple"), VV{"a": 1, "b": 1})
+	})
+}
+
+func TestORSetIsZero(t *testing.T) {
+	t.Run("NilState", func(t *testing.T) {
+		t.Parallel()
+		or := ORSet{}
+
+		assert.True(t, or.IsZero())
+	})
+
+	t.Run("Empty", func(t *testing.T) {
+		t.Parallel()
+		or := NewORSet("a")
+
+		assert.True(t, or.IsZero())
+	})
+
+	t.Run("RemoveAbsentElementReturnsZero", func(t *testing.T) {
+		t.Parallel()
+		or := NewORSet("a")
+
+		d := or.Remove("apple", VV{})
+
+		assert.True(t, d.IsZero())
+	})
+
+	t.Run("AfterAdd", func(t *testing.T) {
+		t.Parallel()
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+
+		assert.False(t, or.IsZero())
+	})
+}
+
+func TestORSetIsLessOrEqual(t *testing.T) {
+	t.Run("BothEmpty", func(t *testing.T) {
+		t.Parallel()
+		or := NewORSet("a")
+		other := NewORSet("b")
+
+		got := or.IsLessOrEqual(other)
+
+		assert.True(t, got)
+	})
+
+	t.Run("StrictlyLess", func(t *testing.T) {
+		t.Parallel()
+		// or has apple added by "a"; other observed or's add and also added apple from "b".
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+		other := NewORSet("b")
+		other.Merge(or)
+		d = other.Add("apple", other.CausalContext("apple"))
+		other.Merge(&d)
+
+		got := or.IsLessOrEqual(other)
+
+		assert.True(t, got)
+	})
+
+	t.Run("ORFullyCoveredByOther", func(t *testing.T) {
+		t.Parallel()
+		// or has only apple; other has apple (same history) plus banana. The extra element in
+		// other is irrelevant: or ⊑ other iff every element in or is ⊑ the corresponding element
+		// in other.
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+		other := NewORSet("b")
+		other.Merge(or)
+		d = other.Add("banana", VV{})
+		other.Merge(&d)
+
+		got := or.IsLessOrEqual(other)
+
+		assert.True(t, got)
+	})
+
+	t.Run("EqualState", func(t *testing.T) {
+		t.Parallel()
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+		other := NewORSet("a")
+		other.Merge(or)
+
+		got := or.IsLessOrEqual(other)
+
+		assert.True(t, got)
+	})
+
+	t.Run("IncomparableORHasExtraElement", func(t *testing.T) {
+		t.Parallel()
+		// or tracks banana but other does not: other has implicit empty DVVSet for banana, so
+		// or's non-empty DVVSet for banana is not ⊑ empty.
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+		d = or.Add("banana", VV{})
+		or.Merge(&d)
+		other := NewORSet("b")
+		d = other.Add("apple", VV{})
+		other.Merge(&d)
+
+		got := or.IsLessOrEqual(other)
+
+		assert.False(t, got)
+	})
+
+	t.Run("StrictlyGreater", func(t *testing.T) {
+		t.Parallel()
+		// or has two adds for apple from "a"; other only has one add for apple from "b".
+		or := NewORSet("a")
+		d := or.Add("apple", VV{})
+		or.Merge(&d)
+		d = or.Add("apple", or.CausalContext("apple"))
+		or.Merge(&d)
+		other := NewORSet("b")
+		d = other.Add("apple", VV{})
+		other.Merge(&d)
+
+		got := or.IsLessOrEqual(other)
+
+		assert.False(t, got)
 	})
 }
 
@@ -308,7 +479,8 @@ func TestORSetValues(t *testing.T) {
 	t.Run("SingleElement", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
 
 		assert.EqualValues(t, s.Values(), []string{"apple"})
 	})
@@ -316,9 +488,12 @@ func TestORSetValues(t *testing.T) {
 	t.Run("MultipleElements", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("banana", VV{})
-		s.Add("cherry", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("banana", VV{})
+		s.Merge(&d)
+		d = s.Add("cherry", VV{})
+		s.Merge(&d)
 
 		got := s.Values()
 		slices.Sort(got)
@@ -328,8 +503,10 @@ func TestORSetValues(t *testing.T) {
 	t.Run("DuplicateAddReturnsSingle", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("apple", VV{})
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("apple", VV{})
+		s.Merge(&d)
 
 		assert.EqualValues(t, s.Values(), []string{"apple"})
 	})
@@ -337,9 +514,12 @@ func TestORSetValues(t *testing.T) {
 	t.Run("AfterObservedRemove", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Add("banana", VV{})
-		s.Remove("apple", s.CausalContext("apple"))
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Add("banana", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 
 		assert.EqualValues(t, s.Values(), []string{"banana"})
 	})
@@ -347,8 +527,10 @@ func TestORSetValues(t *testing.T) {
 	t.Run("AfterObservedRemoveAll", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Remove("apple", s.CausalContext("apple"))
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 
 		assert.Nil(t, s.Values())
 	})
@@ -356,9 +538,12 @@ func TestORSetValues(t *testing.T) {
 	t.Run("ReAddAfterObservedRemove", func(t *testing.T) {
 		s := NewORSet("a")
 
-		s.Add("apple", VV{})
-		s.Remove("apple", s.CausalContext("apple"))
-		s.Add("apple", s.CausalContext("apple"))
+		d := s.Add("apple", VV{})
+		s.Merge(&d)
+		d = s.Remove("apple", s.CausalContext("apple"))
+		s.Merge(&d)
+		d = s.Add("apple", s.CausalContext("apple"))
+		s.Merge(&d)
 
 		assert.EqualValues(t, s.Values(), []string{"apple"})
 	})
@@ -366,12 +551,15 @@ func TestORSetValues(t *testing.T) {
 	t.Run("ConcurrentAddAndRemoveLeavesElement", func(t *testing.T) {
 		// Element has a live add sibling concurrent with a remove sibling; Values includes it.
 		a := NewORSet("a")
-		a.Add("apple", VV{})
+		d := a.Add("apple", VV{})
+		a.Merge(&d)
 		b := NewORSet("b")
 		b.Merge(a)
 
-		a.Add("apple", VV{})                        // concurrent re-add on a, empty context
-		b.Remove("apple", b.CausalContext("apple")) // remove on b, only observes original add
+		d = a.Add("apple", VV{})                    // concurrent re-add on a, empty context
+		a.Merge(&d)
+		d = b.Remove("apple", b.CausalContext("apple")) // remove on b, only observes original add
+		b.Merge(&d)
 
 		a.Merge(b)
 
@@ -381,10 +569,14 @@ func TestORSetValues(t *testing.T) {
 
 func TestORSetMarshalRoundtrip(t *testing.T) {
 	a := NewORSet("a")
-	a.Add("apple", VV{})
-	a.Add("banana", VV{})
-	a.Add("cherry", VV{})
-	a.Remove("apple", a.CausalContext("apple"))
+	d := a.Add("apple", VV{})
+	a.Merge(&d)
+	d = a.Add("banana", VV{})
+	a.Merge(&d)
+	d = a.Add("cherry", VV{})
+	a.Merge(&d)
+	d = a.Remove("apple", a.CausalContext("apple"))
+	a.Merge(&d)
 
 	data, err := json.Marshal(a)
 	assert.NoError(t, err)
@@ -403,7 +595,8 @@ func TestORSetMarshalRoundtrip(t *testing.T) {
 	assert.EqualValues(t, got, []string{"banana", "cherry"})
 
 	// b's own node id is preserved across unmarshal; subsequent writes use "b" not "a".
-	b.Add("date", VV{})
+	d = b.Add("date", VV{})
+	b.Merge(&d)
 	assert.EqualValues(t, b.CausalContext("date"), VV{"b": 1})
 }
 
@@ -414,7 +607,8 @@ func TestORSetUnmarshalNullState(t *testing.T) {
 	err := json.Unmarshal([]byte(`{"state":null}`), s)
 	assert.NoError(t, err)
 
-	s.Add("apple", VV{})
+	d := s.Add("apple", VV{})
+	s.Merge(&d)
 
 	assert.True(t, s.Contains("apple"))
 }

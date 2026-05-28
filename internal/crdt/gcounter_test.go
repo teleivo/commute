@@ -44,12 +44,15 @@ func TestGCounterValue(t *testing.T) {
 func TestGCounterIncrement(t *testing.T) {
 	g := NewGCounter("a")
 
-	g.Increment(1)
+	d := g.Increment(1)
+	g.Merge(d)
 
 	assert.EqualValues(t, g.Value(), uint64(1))
 
-	g.Increment(1)
-	g.Increment(5)
+	d = g.Increment(1)
+	g.Merge(d)
+	d = g.Increment(5)
+	g.Merge(d)
 
 	assert.EqualValues(t, g.Value(), uint64(7))
 }
@@ -123,8 +126,62 @@ func TestGCounterMerge(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			tc.a.Merge(tc.b)
+			tc.a.Merge(*tc.b)
 			assert.EqualValues(t, tc.a.Value(), tc.want)
+		})
+	}
+}
+
+func TestGCounterIsLessOrEqual(t *testing.T) {
+	tests := map[string]struct {
+		g     *GCounter
+		other GCounter
+		want  bool
+	}{
+		"BothEmpty": {
+			g:     NewGCounter("a"),
+			other: *NewGCounter("b"),
+			want:  true,
+		},
+		"StrictlyLess": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 3}},
+			other: GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5}},
+			want:  true,
+		},
+		"GFullyCoveredByOther": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 3}},
+			other: GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5, "b": 2}},
+			want:  true,
+		},
+		"EqualState": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5}},
+			other: GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5}},
+			want:  true,
+		},
+		"IncomparableGHasExtraKey": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5}},
+			other: GCounter{nodeID: "b", counters: map[NodeID]uint64{"b": 3}},
+			want:  false,
+		},
+		"OtherHasExtraKey": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 3}},
+			other: GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 3, "b": 5}},
+			want:  true,
+		},
+		"StrictlyGreater": {
+			g:     &GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 5}},
+			other: GCounter{nodeID: "a", counters: map[NodeID]uint64{"a": 3}},
+			want:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tc.g.IsLessOrEqual(tc.other)
+
+			assert.EqualValues(t, got, tc.want)
 		})
 	}
 }

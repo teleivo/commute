@@ -6,13 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
-	"time"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
 	"syscall"
+	"time"
 
 	"github.com/teleivo/commute/internal/server"
 	"github.com/teleivo/commute/internal/version"
@@ -114,6 +115,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		flags.PrintDefaults()
 	}
 	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
+	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port); must match exactly how this node appears in each peer's --peers list")
 	nodeID := flags.String("nodeid", "", "unique node identifier (required)")
 	peers := flags.String("peers", "", "comma-separated list of peer addresses (e.g. host1:7946,host2:7946)")
 	gossipInterval := flags.Duration("gossipinterval", 5*time.Second, "how often to push state to a random peer")
@@ -130,13 +132,28 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		return 2, errFlagParse
 	}
 
+	if _, _, err := net.SplitHostPort(*addr); err != nil {
+		return 2, fmt.Errorf("invalid addr %q: %s", *addr, err)
+	}
+	if *advertiseAddr == "" {
+		return 2, errors.New("advertise-addr is required")
+	}
+	if _, _, err := net.SplitHostPort(*advertiseAddr); err != nil {
+		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	err = profile(func() error {
+		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			return err
+		}
 		srv, err := server.New(server.Config{
 			NodeID:         *nodeID,
-			Addr:           *addr,
+			Listener:       ln,
+			AdvertiseAddr:  *advertiseAddr,
 			Peers:          *peers,
 			GossipInterval: *gossipInterval,
 			Debug:          *debug,
@@ -152,3 +169,4 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	}
 	return 0, nil
 }
+

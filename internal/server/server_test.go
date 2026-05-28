@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +15,70 @@ import (
 	"github.com/teleivo/assertive/require"
 	"github.com/teleivo/commute/internal/server"
 )
+
+func TestNew(t *testing.T) {
+	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	validConfig := server.Config{
+		NodeID:         "node-0",
+		Listener:       fakeListener{addr},
+		AdvertiseAddr:  "127.0.0.1:8080",
+		Peers:          "127.0.0.1:9999",
+		GossipInterval: 1 * time.Second,
+		Stderr:         io.Discard,
+	}
+
+	tests := map[string]struct {
+		cfg     server.Config
+		wantErr bool
+	}{
+		"Valid": {
+			cfg: validConfig,
+		},
+		"MissingNodeID": {
+			cfg:     func() server.Config { c := validConfig; c.NodeID = ""; return c }(),
+			wantErr: true,
+		},
+		"MissingAdvertiseAddr": {
+			cfg:     func() server.Config { c := validConfig; c.AdvertiseAddr = ""; return c }(),
+			wantErr: true,
+		},
+		"AdvertiseAddrMissingHost": {
+			cfg:     func() server.Config { c := validConfig; c.AdvertiseAddr = ":8080"; return c }(),
+			wantErr: true,
+		},
+		"AdvertiseAddrMissingPort": {
+			cfg:     func() server.Config { c := validConfig; c.AdvertiseAddr = "127.0.0.1"; return c }(),
+			wantErr: true,
+		},
+		"MissingPeers": {
+			cfg:     func() server.Config { c := validConfig; c.Peers = ""; return c }(),
+			wantErr: true,
+		},
+		"InvalidPeer": {
+			cfg:     func() server.Config { c := validConfig; c.Peers = "notahost"; return c }(),
+			wantErr: true,
+		},
+		"ZeroGossipInterval": {
+			cfg:     func() server.Config { c := validConfig; c.GossipInterval = 0; return c }(),
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := server.New(tc.cfg)
+
+			if tc.wantErr {
+				assert.NotNil(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
 
 func TestCounterAPI(t *testing.T) {
 	tests := map[string]struct {
@@ -486,8 +551,12 @@ func TestSetSeparateKeys(t *testing.T) {
 
 func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
+	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
 	srv, err := server.New(server.Config{
 		NodeID:         "test-node",
+		Listener:       fakeListener{addr},
+		AdvertiseAddr:  "127.0.0.1:0",
 		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
 		Stderr:         io.Discard,

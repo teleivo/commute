@@ -1,3 +1,5 @@
+// Package server implements a CRDT key-value store node with an HTTP API and gossip-based
+// state replication.
 package server
 
 import (
@@ -23,10 +25,13 @@ import (
 
 // Server is a CRDT key-value store node that serves an HTTP API and gossips state to peers.
 type Server struct {
-	logger         *slog.Logger
-	server         *http.Server
-	store          *Store
-	peers          []string
+	logger        *slog.Logger
+	nodeID        string
+	listener      net.Listener
+	advertiseAddr string
+	server        *http.Server
+	store         *Store
+	peers         []string
 	gossipInterval time.Duration
 	client         *http.Client
 	rng            *rand.Rand
@@ -35,7 +40,8 @@ type Server struct {
 // Config holds the configuration for creating a Server.
 type Config struct {
 	NodeID         string
-	Addr           string        // listen address (e.g. ":8080", "0.0.0.0:8080")
+	Listener       net.Listener  // listener to accept connections on
+	AdvertiseAddr  string        // address advertised to peers (ip:port); must match how peers address this node
 	Peers          string        // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
 	GossipInterval time.Duration // how often to push state to a random peer
 	Client         *http.Client  // HTTP client for gossip
@@ -50,18 +56,17 @@ func New(cfg Config) (*Server, error) {
 	if cfg.NodeID == "" {
 		return nil, errors.New("node ID is required")
 	}
-	addr := cfg.Addr
-	if addr == "" {
-		addr = ":0"
+	if cfg.AdvertiseAddr == "" {
+		return nil, errors.New("advertise address is required")
 	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		return nil, fmt.Errorf("invalid addr %q: %s", addr, err)
+	if host, port, err := net.SplitHostPort(cfg.AdvertiseAddr); err != nil || host == "" || port == "" {
+		return nil, fmt.Errorf("invalid advertise address %q: must be host:port", cfg.AdvertiseAddr)
 	}
 	if cfg.Peers == "" {
 		return nil, errors.New("at least one peer is required")
 	}
 	peers := make(map[string]struct{})
-	for _, p := range strings.Split(cfg.Peers, ",") {
+	for p := range strings.SplitSeq(cfg.Peers, ",") {
 		p = strings.TrimSpace(p)
 		host, port, err := net.SplitHostPort(p)
 		if err != nil {
@@ -70,7 +75,7 @@ func New(cfg Config) (*Server, error) {
 		if host == "" || port == "" {
 			return nil, fmt.Errorf("invalid peer %q: host and port are required", p)
 		}
-		peers["http://"+p] = struct{}{}
+		peers[p] = struct{}{}
 	}
 	if cfg.GossipInterval <= 0 {
 		return nil, errors.New("gossip interval must be greater than zero")
@@ -81,9 +86,12 @@ func New(cfg Config) (*Server, error) {
 		level = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
+	logger = logger.With(
+		slog.String("node_id", cfg.NodeID),
+		slog.String("advertise_addr", cfg.AdvertiseAddr),
+	)
 	handler := http.NewServeMux()
 	server := http.Server{
-		Addr:        addr,
 		Handler:     handler,
 		ReadTimeout: 3 * time.Second,
 		IdleTimeout: 120 * time.Second,
@@ -102,6 +110,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	srv := &Server{
 		logger:         logger,
+		nodeID:         cfg.NodeID,
+		listener:       cfg.Listener,
+		advertiseAddr:  cfg.AdvertiseAddr,
 		server:         &server,
 		store:          NewStore(crdt.NodeID(cfg.NodeID), clock),
 		peers:          slices.Sorted(maps.Keys(peers)),
@@ -116,23 +127,20 @@ func New(cfg Config) (*Server, error) {
 	handler.HandleFunc("GET /sets/{key}", srv.getSet)
 	handler.HandleFunc("POST /sets/{key}", srv.postSet)
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
+	handler.HandleFunc("POST /internal/ack", srv.postAck)
 	return srv, nil
 }
 
 // Start begins serving HTTP and gossiping state to peers. It blocks until the context is cancelled.
 func (srv *Server) Start(ctx context.Context) error {
-	ln, err := net.Listen("tcp", srv.server.Addr)
-	if err != nil {
-		return err
-	}
-	srv.logger.Info("listening", "addr", ln.Addr())
+	srv.logger.Info("listening", "addr", srv.listener.Addr())
 
 	go func() {
 		<-ctx.Done()
 		ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 		if err := srv.server.Shutdown(ctxTimeout); err != nil && !errors.Is(err, context.Canceled) {
-			srv.logger.Error("failed to shutdown", "err", err)
+			srv.logger.Error("failed to shutdown", "error", err)
 		}
 	}()
 
@@ -141,7 +149,7 @@ func (srv *Server) Start(ctx context.Context) error {
 		srv.StartGossip(ctx)
 	})
 
-	if err := srv.server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.server.Serve(srv.listener); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	wg.Wait()
@@ -158,26 +166,31 @@ func (srv *Server) StartGossip(ctx context.Context) {
 		select {
 		case <-t.C:
 			peer := srv.peers[srv.rng.IntN(len(srv.peers))]
-			b, err := srv.store.MarshalState()
-			if err != nil {
-				panic(err)
+			b, ok := srv.store.Delta(peer)
+			if !ok {
+				continue
 			}
 
 			reqCtx, cancel := context.WithTimeout(ctx, timeout)
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, peer+"/internal/gossip", bytes.NewReader(b))
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+peer+"/internal/gossip", bytes.NewReader(b))
 			if err != nil {
 				cancel()
 				panic(err)
 			}
 			req.Header.Add("Content-Type", "application/json")
+			req.Header.Add("X-Node-Addr", srv.advertiseAddr)
 			resp, err := srv.client.Do(req)
 			cancel()
 			if err != nil {
-				srv.logger.Warn("failed to gossip full state", "peer", peer, "error", err)
+				srv.logger.Warn("failed to gossip state", "peer", peer, "error", err)
 				continue
 			}
-			srv.logger.Debug("gossiped full state", "peer", peer)
 			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				srv.logger.Warn("gossip rejected", "peer", peer, "status", resp.StatusCode)
+				continue
+			}
+			srv.logger.Debug("gossiped state", "peer", peer)
 		case <-ctx.Done():
 			return
 		}
@@ -216,7 +229,7 @@ func (srv *Server) getCounters(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	err := e.Encode(resp)
 	if err != nil {
-		srv.logger.Error("failed to encode counter value", "err", err)
+		srv.logger.Error("failed to encode counter value", "error", err)
 	}
 }
 
@@ -278,7 +291,7 @@ func (srv *Server) getRegister(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	err := e.Encode(resp)
 	if err != nil {
-		srv.logger.Error("failed to encode register value", "err", err)
+		srv.logger.Error("failed to encode register value", "error", err)
 	}
 }
 
@@ -342,7 +355,7 @@ func (srv *Server) getSet(w http.ResponseWriter, r *http.Request) {
 	}
 	contexts, err := encodeContexts(vvs)
 	if err != nil {
-		srv.logger.Error("failed to encode set contexts", "err", err)
+		srv.logger.Error("failed to encode set contexts", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -354,7 +367,7 @@ func (srv *Server) getSet(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	err = e.Encode(resp)
 	if err != nil {
-		srv.logger.Error("failed to encode set value", "err", err)
+		srv.logger.Error("failed to encode set value", "error", err)
 	}
 }
 
@@ -435,7 +448,7 @@ func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
 	}
 	contexts, err := encodeContexts(serverVVs)
 	if err != nil {
-		srv.logger.Error("failed to encode set contexts", "err", err)
+		srv.logger.Error("failed to encode set contexts", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -447,11 +460,16 @@ func (srv *Server) postSet(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	err = e.Encode(resp)
 	if err != nil {
-		srv.logger.Error("failed to encode set value", "err", err)
+		srv.logger.Error("failed to encode set value", "error", err)
 	}
 }
 
 func (srv *Server) postGossip(w http.ResponseWriter, r *http.Request) {
+	sender, err := srv.parseNodeAddr(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	if r.Body == nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -469,7 +487,79 @@ func (srv *Server) postGossip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv.store.Merge(body)
+	ackMsg := srv.store.Merge(body)
+	go srv.sendAck(ackMsg, sender)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (srv *Server) sendAck(ackMsg AckMessage, sender string) {
+	ack, err := json.Marshal(ackMsg)
+	if err != nil {
+		srv.logger.Error("failed to marshal ack message", "peer", sender, "error", err)
+		return
+	}
+
+	reqCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+sender+"/internal/ack", bytes.NewReader(ack))
+	if err != nil {
+		cancel()
+		panic(err)
+	}
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("X-Node-Addr", srv.advertiseAddr)
+	resp, err := srv.client.Do(req)
+	cancel()
+	if err != nil {
+		srv.logger.Warn("failed to ack gossip state", "peer", sender, "error", err)
+		return
+	}
+	srv.logger.Debug("acked gossiped state", "peer", sender)
+	_ = resp.Body.Close()
+}
+
+func (srv *Server) postAck(w http.ResponseWriter, r *http.Request) {
+	sender, err := srv.parseNodeAddr(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if r.Body == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body AckMessage
+	err = json.Unmarshal(b, &body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	srv.store.Ack(sender, body)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (srv *Server) parseNodeAddr(r *http.Request) (string, error) {
+	nodeAddr := r.Header["X-Node-Addr"]
+	if nodeAddr == nil {
+		return "", errors.New("header X-Node-Addr missing")
+	}
+	if len(nodeAddr) > 1 {
+		return "", errors.New("multiple X-Node-Addr headers")
+	}
+	peer := nodeAddr[0]
+	if peer == "" {
+		return "", errors.New("header X-Node-Addr empty")
+	}
+	if !slices.Contains(srv.peers, peer) {
+		return "", fmt.Errorf("unknown peer in X-Node-Addr: %q", peer)
+	}
+	return peer, nil
 }

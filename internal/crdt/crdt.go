@@ -47,16 +47,38 @@ func (g *GCounter) Value() uint64 {
 	return sum
 }
 
+// IsZero reports whether the counter has no entries.
+func (g *GCounter) IsZero() bool {
+	return len(g.counters) == 0
+}
+
+// Increment returns a delta that adds n to this node's counter.
+func (g *GCounter) Increment(n uint64) GCounter {
+	return GCounter{
+		counters: map[NodeID]uint64{
+			g.nodeID: g.counters[g.nodeID] + n,
+		},
+	}
+}
+
 // Merge incorporates the state of other into g by taking the max of each node's counter.
-func (g *GCounter) Merge(other *GCounter) {
+func (g *GCounter) Merge(other GCounter) {
+	if g.counters == nil {
+		g.counters = make(map[NodeID]uint64)
+	}
 	for id, v := range other.counters {
 		g.counters[id] = max(g.counters[id], v)
 	}
 }
 
-// Increment adds n to this node's counter.
-func (g *GCounter) Increment(n uint64) {
-	g.counters[g.nodeID] += n
+// IsLessOrEqual reports whether g's causal history is subsumed by other's, i.e. g ⊑ other.
+func (g *GCounter) IsLessOrEqual(other GCounter) bool {
+	for id, v := range g.counters {
+		if v > other.counters[id] {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *GCounter) MarshalJSON() ([]byte, error) {
@@ -87,15 +109,15 @@ func (g *GCounter) UnmarshalJSON(data []byte) error {
 // PNCounter is a positive-negative counter that supports both increment and decrement. The value
 // is the total increments minus the total decrements across all nodes.
 type PNCounter struct {
-	inc *GCounter
-	dec *GCounter
+	inc GCounter
+	dec GCounter
 }
 
 // NewPNCounter creates a PNCounter owned by the given node.
 func NewPNCounter(nodeID NodeID) *PNCounter {
 	return &PNCounter{
-		inc: NewGCounter(nodeID),
-		dec: NewGCounter(nodeID),
+		inc: *NewGCounter(nodeID),
+		dec: *NewGCounter(nodeID),
 	}
 }
 
@@ -104,20 +126,29 @@ func (pn *PNCounter) Value() int64 {
 	return int64(pn.inc.Value()) - int64(pn.dec.Value())
 }
 
+// Increment returns a delta that adds n to this node's positive counter.
+func (pn *PNCounter) Increment(n uint64) PNCounter {
+	return PNCounter{
+		inc: pn.inc.Increment(n),
+	}
+}
+
+// Decrement returns a delta that adds n to this node's negative counter.
+func (pn *PNCounter) Decrement(n uint64) PNCounter {
+	return PNCounter{
+		dec: pn.dec.Increment(n),
+	}
+}
+
 // Merge incorporates the state of other into pn.
 func (pn *PNCounter) Merge(other *PNCounter) {
 	pn.inc.Merge(other.inc)
 	pn.dec.Merge(other.dec)
 }
 
-// Increment adds n to this node's positive counter.
-func (pn *PNCounter) Increment(n uint64) {
-	pn.inc.Increment(n)
-}
-
-// Decrement adds n to this node's negative counter.
-func (pn *PNCounter) Decrement(n uint64) {
-	pn.dec.Increment(n)
+// IsLessOrEqual reports whether pn's causal history is subsumed by other's, i.e. pn ⊑ other.
+func (pn *PNCounter) IsLessOrEqual(other *PNCounter) bool {
+	return pn.inc.IsLessOrEqual(other.inc) && pn.dec.IsLessOrEqual(other.dec)
 }
 
 func (pn *PNCounter) MarshalJSON() ([]byte, error) {
@@ -126,19 +157,19 @@ func (pn *PNCounter) MarshalJSON() ([]byte, error) {
 	}
 
 	v := struct {
-		Inc *GCounter `json:"inc"`
-		Dec *GCounter `json:"dec"`
+		Inc *GCounter `json:"inc,omitzero"`
+		Dec *GCounter `json:"dec,omitzero"`
 	}{
-		Inc: pn.inc,
-		Dec: pn.dec,
+		Inc: &pn.inc,
+		Dec: &pn.dec,
 	}
 	return json.Marshal(v)
 }
 
 func (pn *PNCounter) UnmarshalJSON(data []byte) error {
 	var v struct {
-		Inc *GCounter `json:"inc"`
-		Dec *GCounter `json:"dec"`
+		Inc GCounter `json:"inc,omitzero"`
+		Dec GCounter `json:"dec,omitzero"`
 	}
 	err := json.Unmarshal(data, &v)
 	if err != nil {
@@ -187,6 +218,17 @@ func (lww *LWWRegister) Value() json.RawMessage {
 	return lww.entry.Value
 }
 
+// Set returns a delta containing a new value timestamped by the register's clock.
+func (lww *LWWRegister) Set(value json.RawMessage) LWWRegister {
+	return LWWRegister{
+		entry: lwwEntry{
+			WriterID:  lww.nodeID,
+			Timestamp: lww.clock(),
+			Value:     value,
+		},
+	}
+}
+
 // Merge incorporates the state of other, keeping the value with the higher timestamp.
 func (lww *LWWRegister) Merge(other *LWWRegister) {
 	if other.entry.After(lww.entry) {
@@ -194,13 +236,9 @@ func (lww *LWWRegister) Merge(other *LWWRegister) {
 	}
 }
 
-// Set writes a new value, timestamped by the register's clock.
-func (lww *LWWRegister) Set(value json.RawMessage) {
-	lww.entry = lwwEntry{
-		WriterID:  lww.nodeID,
-		Timestamp: lww.clock(),
-		Value:     value,
-	}
+// IsLessOrEqual reports whether lww's entry is not causally after other's, i.e. lww ⊑ other.
+func (lww *LWWRegister) IsLessOrEqual(other *LWWRegister) bool {
+	return !lww.entry.After(other.entry)
 }
 
 func (lww *LWWRegister) MarshalJSON() ([]byte, error) {
@@ -228,6 +266,11 @@ func NewORSet(nodeID NodeID) *ORSet {
 		nodeID: nodeID,
 		state:  make(map[string]*DVVSet[bool]),
 	}
+}
+
+// IsZero reports whether the set has no entries.
+func (or *ORSet) IsZero() bool {
+	return len(or.state) == 0
 }
 
 // CausalContext returns the version vector summarizing all add/remove events this replica has
@@ -278,29 +321,39 @@ func (or *ORSet) Values() []string {
 	return values
 }
 
-// Add records an add of value on this node by advancing value's DVVSet with an add marker. vv is
-// the causal context the caller observed (typically from a prior CausalContext); it determines
-// which existing siblings are causally observed and discarded by this add.
-func (or *ORSet) Add(value string, vv VV) {
-	state, ok := or.state[value]
-	if !ok {
-		state = NewDVVSet[bool]()
+// Add returns a delta that adds value to the set. vv is the causal context the caller observed
+// (typically from a prior [ORSet.CausalContext]); siblings it covers are discarded, concurrent ones
+// survive.
+func (or *ORSet) Add(value string, vv VV) ORSet {
+	var ds *DVVSet[bool]
+	if state, ok := or.state[value]; ok {
+		ds = state.Clone()
+	} else {
+		ds = NewDVVSet[bool]()
 	}
-	state.Update(or.nodeID, vv, true)
-	or.state[value] = state
+	ds.Update(or.nodeID, vv, true)
+	return ORSet{
+		state: map[string]*DVVSet[bool]{
+			value: ds,
+		},
+	}
 }
 
-// Remove records a remove of value on this node by advancing value's DVVSet with a remove marker.
-// vv is the causal context the caller observed (typically from a prior CausalContext); add
-// siblings it covers are dropped, and concurrent adds it does not cover survive.
-// If value was never added it is a no-op: a lone remove-marker would be beaten by any concurrent
-// add anyway (OR-Set semantics favor add), so there is nothing worth tracking.
-func (or *ORSet) Remove(value string, vv VV) {
+// Remove returns a delta that removes value from the set. vv is the causal context the caller
+// observed (typically from a prior [ORSet.CausalContext]); add siblings it covers are dropped,
+// concurrent adds survive. Returns an empty delta if value was never added.
+func (or *ORSet) Remove(value string, vv VV) ORSet {
 	state, added := or.state[value]
 	if !added { // value was never added
-		return
+		return ORSet{}
 	}
-	state.Update(or.nodeID, vv, false)
+	ds := state.Clone()
+	ds.Update(or.nodeID, vv, false)
+	return ORSet{
+		state: map[string]*DVVSet[bool]{
+			value: ds,
+		},
+	}
 }
 
 // Merge incorporates the state of other into or by syncing per-element DVVSets. Elements only in
@@ -314,6 +367,32 @@ func (or *ORSet) Merge(other *ORSet) {
 			or.state[k].Sync(other.state[k])
 		}
 	}
+}
+
+// IsLessOrEqual reports whether or's causal history is subsumed by other's, i.e. or ⊑ other.
+// The partial order lifts element-wise from DVVSet: or ⊑ other iff for every element tracked by
+// or, its per-element DVVSet is ⊑ the corresponding DVVSet in other. Elements absent from other
+// have an implicit empty DVVSet, so any non-empty per-element DVVSet in or with no matching entry
+// in other means or ⊄ other. Elements only in other are irrelevant:
+//
+//	or ⊑ other ⟺ ∀ e ∈ or. or.state[e] ⊑ other.state[e]
+func (or *ORSet) IsLessOrEqual(other *ORSet) bool {
+	for k, v := range or.state {
+		ds, ok := other.state[k]
+		if !ok || !v.IsLessOrEqual(*ds) {
+			return false
+		}
+	}
+	return true
+}
+
+// Clone returns a deep copy of or.
+func (or *ORSet) Clone() *ORSet {
+	s := make(map[string]*DVVSet[bool], len(or.state))
+	for k, v := range or.state {
+		s[k] = v.Clone()
+	}
+	return &ORSet{nodeID: or.nodeID, state: s}
 }
 
 func (or *ORSet) MarshalJSON() ([]byte, error) {

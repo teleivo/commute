@@ -235,7 +235,7 @@ func TestDVVSetEvent(t *testing.T) {
 		assert.EqualValues(t, d.state["b"].values, []string{"v2"})
 	})
 
-	t.Run("OtherIDEntryWithContextLessOrEqualIsUnchanged", func(t *testing.T) {
+	t.Run("OtherIDEntryWithContextLessThanCounterIsUnchanged", func(t *testing.T) {
 		// For i != r: counter becomes max(n, C(i)). Here C(a)=1 and n=3, so no change.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
@@ -251,7 +251,7 @@ func TestDVVSetEvent(t *testing.T) {
 		assert.EqualValues(t, d.state["b"].values, []string{"v2"})
 	})
 
-	t.Run("OtherIDEntryCounterBumpedByContextMax", func(t *testing.T) {
+	t.Run("OtherIDEntryCounterRaisedToContextWhenContextIsHigher", func(t *testing.T) {
 		// For i != r: if C(i) > n, bump n to C(i). Values are preserved.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
@@ -429,7 +429,7 @@ func TestDVVSetSync(t *testing.T) {
 		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
 	})
 
-	t.Run("HigherCounterTruncatesWhenLowSideHasExtraSiblings", func(t *testing.T) {
+	t.Run("HighCounterSideTruncatedWhenLowSideHasNoSiblings", func(t *testing.T) {
 		// Mirrors Erlang: sync([W,Z]) where W={a,1,[]}, Z={a,2,[v2,v1]}.
 		// Z has higher counter 2. W has counter 1 but no values, meaning W already
 		// knows about dot (a,1) and it was not kept. So merging drops v1 from Z.
@@ -451,10 +451,10 @@ func TestDVVSetSync(t *testing.T) {
 		assert.EqualValues(t, d.state["a"].values, []string{"v2"})
 	})
 
-	t.Run("ConcurrentSiblingsOnSameIDFromBothSides", func(t *testing.T) {
-		// Both sides advanced a to counter 2, but kept different siblings:
-		// receiver: (a, 2, [v2a, v1]), other: (a, 2, [v2b, v1]).
-		// Counters equal, coverage equal (N-len = 0 both sides), keep either.
+	t.Run("MergeBranchEqualCounterEqualCoverage", func(t *testing.T) {
+		// Constructed state: not reachable via Update under unique node ids, since writes under
+		// id a only happen on replica a and that replica has a single timeline. Tests the merge
+		// formula directly: counters equal, coverage equal (N-len = 0 both sides), keep either.
 		// The Erlang merge returns L1 in the N1 >= N2 + coverage-equal branch.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{
@@ -530,6 +530,113 @@ func TestDVVSetSync(t *testing.T) {
 		assert.Equals(t, other.state["b"].counter, uint64(1))
 		assert.EqualValues(t, other.state["b"].values, []string{"vb"})
 	})
+}
+
+func TestDVVSetIsLessOrEqual(t *testing.T) {
+	tests := map[string]struct {
+		ds    *DVVSet[string]
+		other DVVSet[string]
+		want  bool
+	}{
+		"BothEmpty": {
+			ds:    NewDVVSet[string](),
+			other: *NewDVVSet[string](),
+			want:  true,
+		},
+		"StrictlyLess": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 1},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 3},
+				},
+			},
+			want: true,
+		},
+		"DSFullyCoveredByOther": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 2},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 3},
+					"b": {counter: 1},
+				},
+			},
+			want: true,
+		},
+		"EqualState": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 2},
+					"b": {counter: 1},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 2},
+					"b": {counter: 1},
+				},
+			},
+			want: true,
+		},
+		"OtherHasExtraKey": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 3},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 3},
+					"b": {counter: 5},
+				},
+			},
+			want: true,
+		},
+		// ds has entry for "a" that other doesn't: other("a") = 0 < ds("a") = 1.
+		"IncomparableDSHasExtraKey": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 1},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"b": {counter: 3},
+				},
+			},
+			want: false,
+		},
+		"StrictlyGreater": {
+			ds: &DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 3},
+				},
+			},
+			other: DVVSet[string]{
+				state: map[NodeID]dvvEntry[string]{
+					"a": {counter: 1},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tc.ds.IsLessOrEqual(tc.other)
+
+			assert.EqualValues(t, got, tc.want)
+		})
+	}
 }
 
 func TestDVVSetUpdate(t *testing.T) {
