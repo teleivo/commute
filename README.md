@@ -116,7 +116,12 @@ curl localhost:8080/sets/fruits
 
 ## Limitations
 
-* Static membership: peers are configured at startup, no dynamic join/leave
+* No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
+  if all nodes are down at once the data is lost.
+* Static membership: peers are configured at startup, no dynamic join/leave.
+* No delta garbage collection: the delta buffer grows unboundedly; it will be garbage collected
+  once dynamic membership (SWIM) is in place, since GC requires knowing which peers have left for
+  good vs. are temporarily partitioned.
 * Delta-state gossip: deltas are propagated using the delta-interval anti-entropy algorithm
   (Algorithm 2) from Almeida et al.,
   [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529), which satisfies the
@@ -127,14 +132,11 @@ curl localhost:8080/sets/fruits
   (avoid back-propagating received deltas to their origin) and RR (strip already-seen
   join-irreducible states from received delta-groups using join decomposition). Neither is
   implemented here.
-* No delta garbage collection: the delta buffer grows unboundedly; it will be garbage collected
-  once dynamic membership (SWIM) is in place, since GC requires knowing which peers have left for
-  good vs. are temporarily partitioned.
-* No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
-  if all nodes are down at once the data is lost.
 * Trusted network, no Byzantine tolerance: gossip and the HTTP API are unauthenticated and peers
   are assumed to follow the protocol. Anyone who can reach a node can forge contexts or corrupt
   convergence.
+* JSON only: all values (register, set elements) and internal gossip messages use JSON. Binary
+  values are not supported, and a more efficient wire format (e.g. protobuf) is not used.
 
 ## Acknowledgments
 
