@@ -9,7 +9,7 @@ detect concurrent operations precisely and clients can supply a causal context o
 ## Features
 
 * PN-Counter (increment and decrement)
-* LWW-Register (last-writer-wins, stores any JSON value)
+* LWW-Register (last-writer-wins)
 * OR-Set (observed-remove set with per-element causal contexts, stores strings)
 * Delta-state gossip to a random peer on a configurable interval (default 5s)
 
