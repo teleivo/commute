@@ -81,19 +81,6 @@ curl localhost:8081/sets/fruits
 # }
 ```
 
-Remove an element. Echo back the contexts you got from the previous read so the server knows
-which adds your remove observed; concurrent adds from other replicas are not affected:
-
-```sh
-curl -X POST localhost:8081/sets/fruits -d '{
-  "remove": ["apple"],
-  "contexts": {"apple": "<base64 blob from the previous read>"}
-}'
-```
-
-A POST also returns the same `values` + `contexts` shape, so a client can chain writes without
-an extra GET.
-
 #### Observed-remove in action
 
 Add `apple` on node-0 and let it propagate, then remove from node-1 with a stale context while
