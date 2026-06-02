@@ -169,4 +169,3 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	}
 	return 0, nil
 }
-
