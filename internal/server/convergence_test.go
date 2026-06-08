@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -627,7 +627,7 @@ func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 			GossipInterval: 1 * time.Second,
 			Client:         client,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
-			Stderr:         io.Discard,
+			Logger:         slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug})),
 		}
 		if i < len(clocks) {
 			cfg.Clock = clocks[i]

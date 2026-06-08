@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/teleivo/commute/internal/server"
+	"github.com/teleivo/commute/internal/swim"
 	"github.com/teleivo/commute/internal/version"
 )
 
@@ -116,12 +118,17 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	}
 	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
 	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port); must match exactly how this node appears in each peer's --peers list")
-	nodeID := flags.String("nodeid", "", "unique node identifier (required)")
-	peers := flags.String("peers", "", "comma-separated list of peer addresses (e.g. host1:7946,host2:7946)")
-	gossipInterval := flags.Duration("gossipinterval", 5*time.Second, "how often to push state to a random peer")
+	nodeID := flags.String("node-id", "", "unique node identifier (required)")
+	peers := flags.String("peers", "", "comma-separated list of peer HTTP addresses (e.g. host1:8080,host2:8080)")
+	gossipInterval := flags.Duration("gossip-interval", 5*time.Second, "how often to push state to a random peer")
+	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
+	swimPeers := flags.String("swim-peers", "", "comma-separated list of peer UDP addresses for SWIM (e.g. host1:7946,host2:7946)")
+	swimProtocolPeriod := flags.Duration("swim-protocol-period", 1*time.Second, "SWIM protocol period")
+	swimAckTimeout := flags.Duration("swim-ack-timeout", 500*time.Millisecond, "direct ack wait duration before probing indirectly")
+	swimSubgroupSize := flags.Int("swim-subgroup-size", 3, "number of nodes used for indirect probing")
 	debug := flags.Bool("debug", false, "enable debug logging")
-	cpuProfile := flags.String("cpuprofile", "", "write cpu profile to `file`")
-	memProfile := flags.String("memprofile", "", "write memory profile to `file`")
+	cpuProfile := flags.String("cpu-profile", "", "write cpu profile to `file`")
+	memProfile := flags.String("mem-profile", "", "write memory profile to `file`")
 	traceProfile := flags.String("trace", "", "write execution trace to `file`")
 
 	err := flags.Parse(args)
@@ -141,9 +148,21 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if _, _, err := net.SplitHostPort(*advertiseAddr); err != nil {
 		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
 	}
+	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
+		return 2, fmt.Errorf("invalid swim-addr %q: %s", *swimAddr, err)
+	}
+	if *swimPeers == "" {
+		return 2, errors.New("swim-peers is required")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(wErr, &slog.HandlerOptions{Level: level}))
 
 	err = profile(func() error {
 		ln, err := net.Listen("tcp", *addr)
@@ -151,22 +170,45 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 			return err
 		}
 		srv, err := server.New(server.Config{
-			NodeID:         *nodeID,
-			Listener:       ln,
-			AdvertiseAddr:  *advertiseAddr,
-			Peers:          *peers,
+			NodeID:        *nodeID,
+			Listener:      ln,
+			AdvertiseAddr: *advertiseAddr,
+			Peers:         *peers,
 			GossipInterval: *gossipInterval,
-			Debug:          *debug,
-			Stderr:         os.Stderr,
+			Logger:        logger,
 		})
 		if err != nil {
 			return err
 		}
-		return srv.Start(ctx)
+		swimConn, err := net.ListenPacket("udp", *swimAddr)
+		if err != nil {
+			return err
+		}
+		member, err := swim.New(swim.Config{
+			NodeID:         *nodeID,
+			Conn:           swimConn,
+			Peers:          *swimPeers,
+			ProtocolPeriod: *swimProtocolPeriod,
+			AckTimeout:     *swimAckTimeout,
+			SubgroupSize:   *swimSubgroupSize,
+			Notifier:       srv,
+			Logger:         logger,
+		})
+		if err != nil {
+			return err
+		}
+
+		errs := make(chan error, 2)
+		go func() {
+			errs <- member.Start(ctx)
+		}()
+		go func() {
+			errs <- srv.Start(ctx)
+		}()
+		return errors.Join(<-errs, <-errs)
 	}, *cpuProfile, *memProfile, *traceProfile)
 	if err != nil {
 		return 1, err
 	}
 	return 0, nil
 }
-

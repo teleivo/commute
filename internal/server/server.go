@@ -21,17 +21,19 @@ import (
 	"time"
 
 	"github.com/teleivo/commute/internal/crdt"
+	"github.com/teleivo/commute/internal/swim"
 )
 
 // Server is a CRDT key-value store node that serves an HTTP API and gossips state to peers.
 type Server struct {
-	logger        *slog.Logger
-	nodeID        string
-	listener      net.Listener
-	advertiseAddr string
-	server        *http.Server
-	store         *Store
-	peers         []string
+	logger         *slog.Logger
+	nodeID         string
+	listener       net.Listener
+	advertiseAddr  string
+	server         *http.Server
+	store          *Store
+	peers          []string
+	peersMu        sync.RWMutex
 	gossipInterval time.Duration
 	client         *http.Client
 	rng            *rand.Rand
@@ -47,8 +49,7 @@ type Config struct {
 	Client         *http.Client  // HTTP client for gossip
 	Rng            *rand.Rand    // random source for peer selection
 	Clock          crdt.Clock    // clock for LWW timestamps
-	Debug          bool          // enable debug logging
-	Stderr         io.Writer     // output for error logging
+	Logger         *slog.Logger  // if nil, logging is disabled
 }
 
 // New creates a Server with the given configuration.
@@ -81,12 +82,12 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("gossip interval must be greater than zero")
 	}
 
-	level := slog.LevelInfo
-	if cfg.Debug {
-		level = slog.LevelDebug
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
-	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
 	logger = logger.With(
+		slog.String("component", "server"),
 		slog.String("node_id", cfg.NodeID),
 		slog.String("advertise_addr", cfg.AdvertiseAddr),
 	)
@@ -165,7 +166,14 @@ func (srv *Server) StartGossip(ctx context.Context) {
 	for {
 		select {
 		case <-t.C:
+			srv.peersMu.RLock()
+			if len(srv.peers) == 0 {
+				srv.peersMu.RUnlock()
+				continue
+			}
 			peer := srv.peers[srv.rng.IntN(len(srv.peers))]
+			srv.peersMu.RUnlock()
+
 			b, ok := srv.store.Delta(peer)
 			if !ok {
 				continue
@@ -558,8 +566,24 @@ func (srv *Server) parseNodeAddr(r *http.Request) (string, error) {
 	if peer == "" {
 		return "", errors.New("header X-Node-Addr empty")
 	}
+	srv.peersMu.RLock()
+	defer srv.peersMu.RUnlock()
 	if !slices.Contains(srv.peers, peer) {
 		return "", fmt.Errorf("unknown peer in X-Node-Addr: %q", peer)
 	}
 	return peer, nil
+}
+
+// Notify implements [swim.Notifier]. It is called by the SWIM failure detector when a peer's
+// membership status changes.
+func (srv *Server) Notify(peer string, kind swim.EventKind) {
+	if kind != swim.Dead {
+		return
+	}
+
+	srv.peersMu.Lock()
+	srv.peers = slices.DeleteFunc(srv.peers, func(p string) bool {
+		return p == peer
+	})
+	srv.peersMu.Unlock()
 }

@@ -12,6 +12,7 @@ detect concurrent operations precisely and clients can supply a causal context o
 * LWW-Register (last-writer-wins)
 * OR-Set (observed-remove set with per-element causal contexts, stores strings)
 * Delta-state gossip to a random peer on a configurable interval (default 5s)
+* SWIM failure detection: dead peers are removed from the gossip pool automatically
 
 ## Run
 
@@ -105,10 +106,14 @@ curl localhost:8080/sets/fruits
 
 * No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
   if all nodes are down at once the data is lost.
-* Static membership: peers are configured at startup, no dynamic join/leave.
+* Static initial membership: peers are configured at startup. SWIM removes dead peers from the
+  gossip pool automatically, but a node that leaves cannot rejoin without a restart of the cluster.
+  Without dynamic join, there is also a cold-start race: if a peer is probed before it is reachable
+  (e.g. DNS not yet resolved in Docker), it is declared dead immediately and silently dropped from
+  the gossip pool for the lifetime of the cluster.
 * No delta garbage collection: the delta buffer grows unboundedly; it will be garbage collected
-  once dynamic membership (SWIM) is in place, since GC requires knowing which peers have left for
-  good vs. are temporarily partitioned.
+  once join/leave is supported, since GC requires knowing which peers have left for good vs. are
+  temporarily partitioned.
 * Delta-state gossip: deltas are propagated using the delta-interval anti-entropy algorithm
   (Algorithm 2) from Almeida et al.,
   [Delta State Replicated Data Types](https://arxiv.org/abs/1603.01529), which satisfies the
@@ -138,6 +143,9 @@ delta-state gossip.
 * Gonçalves & Almeida,
 [Dotted-Version-Vectors](https://github.com/ricardobcl/Dotted-Version-Vectors). Reference Erlang
 implementation of DVVSet used as a guide and test source.
+* Das, Gupta & Motivala, [SWIM: Scalable Weakly-consistent Infection-style Process Group Membership
+Protocol](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf). Failure detection
+protocol implemented for peer liveness monitoring.
 
 ## Disclaimer
 

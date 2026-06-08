@@ -1,9 +1,18 @@
 # TODO
 
-* Crash recovery gap: all state is volatile, so a crashed node rejoins empty. Its peers still
-  hold their ack sequence for it and will send delta-intervals starting from there, skipping all
-  history the crashed node now needs. Fix: advertise the node's current sequence in gossip
-  messages so peers detect the regression and fall back to full state.
+* buffer pool for UDP reads in swim.Listen (sync.Pool of []byte)
+* per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
+  dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
+* piggyback membership events on ping/ack/ping-req messages (SWIM paper Section 3.1)
+
+* Fly.io deployment: x nodes across regions
+  * how could I demo this?
+  * should I work on metrics now? before adding more features
+
+* Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
+* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
+  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
+  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
 
 ## Phase 3 — Observability
 
@@ -57,13 +66,9 @@ once you stop. Target sum = 0.
 
 ## Phase 4 — SWIM membership
 
-* Ping/ack direct failure detection over UDP
-* Ping-req indirect probing
-* Suspicion and dead/leave states
-* Membership events piggybacked on gossip messages
+* Implement lifeguard extensions from Hashicorp
 * Garbage collect deltas acked by all neighbors (needs membership to distinguish "left for good"
   from "temporarily partitioned" before pruning deltas a slow neighbor still needs)
-* Fly.io deployment: 3 nodes across regions (can also be done earlier for fun)
 
 ## Later
 
