@@ -1,8 +1,12 @@
 # TODO
 
 Implement basic failure detection algorithm of
-  * review tests
-  * implement: ping-req indirect probing
+  * fix: ping-req indirect probing
+  * cleanup:
+    * make a send taking a context
+    * use context style in Probe? better than my ticker?
+    * keep as is or go for some kind of probe struct with state machine? or wait until I implement
+    suspicion
   * membership events piggybacked on gossip messages?
   * integrate swim into commute
   * merge to main
