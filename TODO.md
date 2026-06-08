@@ -1,9 +1,22 @@
 # TODO
 
-* Crash recovery gap: all state is volatile, so a crashed node rejoins empty. Its peers still
-  hold their ack sequence for it and will send delta-intervals starting from there, skipping all
-  history the crashed node now needs. Fix: advertise the node's current sequence in gossip
-  messages so peers detect the regression and fall back to full state.
+Implement basic failure detection algorithm of
+  * review tests
+  * implement: ping-req indirect probing
+  * membership events piggybacked on gossip messages?
+  * integrate swim into commute
+  * merge to main
+
+* [can we fix this now?] crash recovery gap: all state is volatile, so a crashed node rejoins empty.
+Its peers still hold their ack sequence for it and will send delta-intervals starting from there,
+skipping all history the crashed node now needs. Fix: advertise the node's current sequence in
+gossip messages so peers detect the regression and fall back to full state.
+
+* Implement SWIM++ with suspicion and dead/leave states
+
+Questions
+* [for later as I only do failure detection first] chicken and egg: where does a node that wants to
+  join send its alive message to?
 
 ## Phase 3 — Observability
 
@@ -57,13 +70,10 @@ once you stop. Target sum = 0.
 
 ## Phase 4 — SWIM membership
 
-* Ping/ack direct failure detection over UDP
-* Ping-req indirect probing
-* Suspicion and dead/leave states
-* Membership events piggybacked on gossip messages
+* Fly.io deployment: x nodes across regions and demo
+* Implement lifeguard extensions from Hashicorp
 * Garbage collect deltas acked by all neighbors (needs membership to distinguish "left for good"
   from "temporarily partitioned" before pruning deltas a slow neighbor still needs)
-* Fly.io deployment: 3 nodes across regions (can also be done earlier for fun)
 
 ## Later
 
