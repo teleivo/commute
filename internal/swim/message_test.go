@@ -1,6 +1,8 @@
 package swim
 
 import (
+	"encoding/binary"
+	"hash/crc32"
 	"testing"
 
 	"github.com/teleivo/assertive/assert"
@@ -11,7 +13,7 @@ func TestMessageHeaderSize(t *testing.T) {
 	msg := NewMessage(ping, 0, "")
 	data, err := msg.MarshalBinary()
 	require.NoError(t, err)
-	assert.EqualValues(t, messageHeaderSize, len(data))
+	assert.EqualValues(t, minMessageSize, len(data))
 }
 
 func TestMessageRoundTrip(t *testing.T) {
@@ -48,12 +50,23 @@ func TestMessageUnmarshalBinaryError(t *testing.T) {
 			data: make([]byte, headerSize-1),
 		},
 		"TargetLenExceedsRemainingData": {
-			// complete header claiming targetLen=20, but only 3 target bytes follow
+			// valid pingReq with 3-byte target, but TargetLen tampered to claim 20 bytes
 			data: func() []byte {
-				b := make([]byte, headerSize+3)
-				b[0] = messageVersion
-				b[1] = byte(pingReq)
-				b[headerSize-1] = 20 // TargetLen claims 20 bytes
+				msg := NewMessage(pingReq, 1, "abc")
+				b, _ := msg.MarshalBinary()
+				b[headerSize-1] = 20 // tamper TargetLen to claim 20 bytes
+				// recompute checksum over tampered payload
+				h := crc32.NewIEEE()
+				h.Write(b[:len(b)-4])
+				binary.BigEndian.PutUint32(b[len(b)-4:], h.Sum32())
+				return b
+			}(),
+		},
+		"ChecksumMismatch": {
+			data: func() []byte {
+				msg := NewMessage(ping, 1, "")
+				b, _ := msg.MarshalBinary()
+				b[2] ^= 0xff // corrupt a byte in Period
 				return b
 			}(),
 		},

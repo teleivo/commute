@@ -2,13 +2,12 @@
 
 Implement basic failure detection algorithm of
   * cleanup:
-    * create a buffer pool for reading message? and something else?
     * make a send take a context; is that when transitioning from periodTimer to context makes
     sense?
-    * checksum into message?
+  * create a buffer pool for reading message? and something else?
+  * membership events piggybacked on gossip messages?
     * call notifier in a goroutine as it will block the Probe and can thus get us off track from the
     proto period
-  * membership events piggybacked on gossip messages?
   * integrate swim into commute
   * merge to main
 
