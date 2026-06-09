@@ -1,14 +1,16 @@
 # TODO
 
 Implement basic failure detection algorithm of
-  * cleanup:
-    * make a send take a context; is that when transitioning from periodTimer to context makes
-    sense?
+  * integrate swim into commute
+    * add RemovePeer (or similar) method to server.Server so the Notifier implementation can evict
+      dead peers from the gossip list after construction
+    * networking: bind a separate UDP port for SWIM (e.g. --swim-addr :7946) in main.go via
+      net.ListenPacket, independent of the TCP listener; add --swim-peers flag (host:port list for
+      UDP peers, distinct from --peers which are TCP gossip peers)
   * create a buffer pool for reading message? and something else?
   * membership events piggybacked on gossip messages?
     * call notifier in a goroutine as it will block the Probe and can thus get us off track from the
     proto period
-  * integrate swim into commute
   * merge to main
 
 * [can we fix this now?] crash recovery gap: all state is volatile, so a crashed node rejoins empty.

@@ -8,12 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"math/rand/v2"
 	"net"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -49,8 +47,7 @@ type Config struct {
 	SubgroupSize   int                                 // k in the paper: number of members used for indirect probing
 	Notifier       Notifier                            // if nil, membership changes are not reported
 	Rng            *rand.Rand                          // random source for peer selection
-	Debug          bool                                // enable debug logging
-	Stderr         io.Writer                           // output for logging, defaults to os.Stderr
+	Logger         *slog.Logger                        // if nil, logging is disabled
 }
 
 // New creates a Member from the given Config.
@@ -101,15 +98,10 @@ func New(cfg Config) (*Member, error) {
 		return nil, errors.New("subgroup size must be greater than zero")
 	}
 
-	stderr := cfg.Stderr
-	if stderr == nil {
-		stderr = os.Stderr
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
-	level := slog.LevelInfo
-	if cfg.Debug {
-		level = slog.LevelDebug
-	}
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	logger = logger.With(
 		slog.String("component", "swim"),
 		slog.String("node_id", cfg.NodeID),

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,8 +26,6 @@ func TestNew(t *testing.T) {
 		ProtocolPeriod: 1 * time.Second,
 		AckTimeout:     500 * time.Millisecond,
 		SubgroupSize:   3,
-		Debug:          true,
-		Stderr:         io.Discard,
 	}
 
 	tests := map[string]struct {
@@ -222,7 +219,6 @@ func newCluster(t *testing.T, nodes int) *cluster {
 			SubgroupSize:   1,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
 			Notifier:       notifiers[i],
-			Stderr:         io.Discard,
 		}
 		m, err := swim.New(cfg)
 		require.NoError(t, err)
