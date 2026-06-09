@@ -358,14 +358,21 @@ func (m *Member) Probe(ctx context.Context) {
 					_ = m.send(indirect, NewMessage(pingReq, period, peer))
 				}
 			case <-periodTimer.C:
-				// period ended so peer is declared dead
+				// period ended without getting an ack so peer is declared dead
+				// TODO do I need to stop? what is the benefit? 1.23+ godoc says not necessarily
+				// needed anymore and since we loop back we do Reset and on return we have defer
 				ackTimeout.Stop()
+				// TODO in theory these locks could also mean we keep extending our time in between
+				// periodS no? but doing all of this in another goroutine is odd as we need an up to
+				// date m.peers for next iter
 				m.muPeers.Lock()
 				m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
 				delete(m.peerAddrs, peer)
 				m.muPeers.Unlock()
 				m.logger.Info("peer is dead", "peer", peer, "period", period)
 				if m.notifier != nil {
+					// TODO call this in a goroutine as it will block the Probe and can thus get us
+					// off track from the proto period
 					m.notifier.Notify(peer, Dead)
 				}
 				break waitAck
@@ -373,7 +380,7 @@ func (m *Member) Probe(ctx context.Context) {
 				if a.Period == period && a.Addr.String() == peer {
 					m.logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
-					// Period still running; wait for it to expire before next probe.
+					// wait for the period to expire before moving on to the next probe
 					select {
 					case <-ctx.Done():
 						return
