@@ -1,0 +1,245 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/teleivo/commute/internal/swim"
+)
+
+// errFlagParse is a sentinel error indicating flag parsing failed.
+// The flag package already printed the error, so main should not print again.
+var errFlagParse = errors.New("flag parse error")
+
+func main() {
+	code, err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	if err != nil && err != errFlagParse {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
+	os.Exit(code)
+}
+
+func run(args []string, _ io.Reader, _ io.Writer, wErr io.Writer) (int, error) {
+	flags := flag.NewFlagSet("swimdemo", flag.ContinueOnError)
+	flags.SetOutput(wErr)
+	flags.Usage = func() {
+		_, _ = fmt.Fprintln(wErr, "usage: swimdemo [flags]")
+		_, _ = fmt.Fprintln(wErr, "flags:")
+		flags.PrintDefaults()
+	}
+	nodes := flags.Uint("nodes", 3, "number of member nodes to start")
+	protocolPeriod := flags.Duration("period", 1*time.Second, "SWIM protocol period T'")
+	ackTimeout := flags.Duration("ack-timeout", 200*time.Millisecond, "how long to wait for a direct ack before indirect probing")
+	subgroupSize := flags.Int("subgroup", 2, "indirect probing subgroup size k")
+	debug := flags.Bool("debug", false, "enable debug logging")
+	err := flags.Parse(args)
+	if err != nil {
+		if err == flag.ErrHelp {
+			return 0, nil
+		}
+		return 2, errFlagParse
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	conns := make(map[string]*net.UDPConn, *nodes)
+	for i := range *nodes {
+		nodeID := fmt.Sprintf("node-%d", i)
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			return 1, err
+		}
+		defer func() {
+			_ = conn.Close()
+		}()
+		conns[nodeID] = conn
+	}
+	addrToID := make(map[string]string, *nodes)
+	for id, conn := range conns {
+		addrToID[conn.LocalAddr().String()] = id
+	}
+	peers := make(map[string][]string, *nodes)
+	for i := range *nodes {
+		nodeID := fmt.Sprintf("node-%d", i)
+		for n, conn := range conns {
+			if n != nodeID {
+				peers[nodeID] = append(peers[nodeID], conn.LocalAddr().String())
+			}
+		}
+	}
+
+	events := make(chan event, int(*nodes))
+	var wg sync.WaitGroup
+	members := make(map[string]*swim.Member, *nodes)
+	fns := make(map[string]context.CancelFunc, *nodes)
+	for i := range *nodes {
+		nodeID := fmt.Sprintf("node-%d", i)
+		member, err := swim.New(swim.Config{
+			NodeID:         nodeID,
+			Conn:           conns[nodeID],
+			Peers:          strings.Join(peers[nodeID], ","),
+			ProtocolPeriod: *protocolPeriod,
+			AckTimeout:     *ackTimeout,
+			SubgroupSize:   *subgroupSize,
+			Notifier:       &notifier{nodeID: nodeID, events: events},
+			Debug:          *debug,
+			Stderr:         os.Stderr,
+		})
+		if err != nil {
+			return 1, err
+		}
+		members[nodeID] = member
+		wg.Go(func() {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			fns[nodeID] = cancel
+			_ = member.Start(ctx)
+		})
+	}
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGUSR1, syscall.SIGUSR2)
+	go func() {
+		for sig := range sigCh {
+			var nodeID string
+			switch sig {
+			case syscall.SIGUSR1:
+				nodeID = "node-1"
+			case syscall.SIGUSR2:
+				nodeID = "node-2"
+			}
+			fns[nodeID]()
+			events <- event{nodeID: nodeID, peer: nodeID, kind: swim.Dead}
+		}
+	}()
+
+	nodeIDs := make([]string, 0, len(members))
+	for id := range members {
+		nodeIDs = append(nodeIDs, id)
+	}
+	wg.Go(func() {
+		renderLoop(ctx, os.Stdout, nodeIDs, peers, addrToID, events)
+	})
+
+	wg.Wait()
+	return 0, nil
+}
+
+// event carries a membership change detected by one node about a peer.
+type event struct {
+	nodeID string
+	peer   string
+	kind   swim.EventKind
+}
+
+// notifier implements swim.Notifier and forwards changes as events onto a channel.
+type notifier struct {
+	nodeID string
+	events chan<- event
+}
+
+func (n *notifier) Notify(peer string, kind swim.EventKind) {
+	n.events <- event{nodeID: n.nodeID, peer: peer, kind: kind}
+}
+
+func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[string][]string, addrToID map[string]string, events <-chan event) {
+	// dead tracks which nodes each member considers dead: dead[nodeID][peerID] = true
+	dead := make(map[string]map[string]bool)
+	for _, id := range nodeIDs {
+		dead[id] = make(map[string]bool)
+	}
+
+	render := func() {
+		dot := buildDOT(nodeIDs, peers, addrToID, dead)
+		png, err := renderDOT(dot, 150)
+		if err != nil {
+			return
+		}
+		displayKitty(w, png)
+	}
+
+	render()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-events:
+			peerID := addrToID[e.peer]
+			if peerID == "" {
+				// peer is already a node ID (e.g. from SIGUSR signal)
+				peerID = e.peer
+			}
+			dead[e.nodeID][peerID] = true
+			render()
+		}
+	}
+}
+
+func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]string, dead map[string]map[string]bool) string {
+	var b strings.Builder
+	b.WriteString("digraph swim {\n")
+	b.WriteString("  node [shape=circle]\n")
+	for _, id := range nodeIDs {
+		if dead[id][id] {
+			fmt.Fprintf(&b, "  %q [color=red fontcolor=red]\n", id)
+		} else {
+			fmt.Fprintf(&b, "  %q\n", id)
+		}
+	}
+	for _, id := range nodeIDs {
+		for _, peerAddr := range peers[id] {
+			peerID := addrToID[peerAddr]
+			color := "black"
+			if dead[id][peerID] {
+				color = "red"
+			}
+			fmt.Fprintf(&b, "  %q -> %q [color=%s]\n", id, peerID, color)
+		}
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+func renderDOT(dot string, dpi int) ([]byte, error) {
+	cmd := exec.Command("dot", fmt.Sprintf("-Gdpi=%d", dpi), "-Gsize=18,18!", "-Tpng")
+	cmd.Stdin = bytes.NewBufferString(dot)
+	return cmd.Output()
+}
+
+func displayKitty(w io.Writer, png []byte) {
+	b64 := base64.StdEncoding.EncodeToString(png)
+
+	_, _ = fmt.Fprint(w, "\033[2J\033[H")
+
+	const chunkSize = 4096
+	for i := 0; i < len(b64); i += chunkSize {
+		end := min(i+chunkSize, len(b64))
+		chunk := b64[i:end]
+
+		m := 1
+		if end >= len(b64) {
+			m = 0
+		}
+
+		if i == 0 {
+			_, _ = fmt.Fprintf(w, "\033_Ga=T,f=100,m=%d;%s\033\\", m, chunk)
+		} else {
+			_, _ = fmt.Fprintf(w, "\033_Gm=%d;%s\033\\", m, chunk)
+		}
+	}
+	_, _ = fmt.Fprintln(w)
+}
