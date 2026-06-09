@@ -6,13 +6,11 @@ package swim
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
-	"math"
 	"math/rand/v2"
 	"net"
 	"slices"
@@ -139,161 +137,139 @@ func (m *Member) Start(ctx context.Context) error {
 	return nil
 }
 
-type messageKind uint8
-
-const (
-	ping messageKind = iota
-	ack
-	pingReq
-)
-
-func (a messageKind) String() string {
-	switch a {
-	case ping:
-		return "ping"
-	case ack:
-		return "ack"
-	case pingReq:
-		return "ping-req"
-	default:
-		panic(fmt.Sprintf("unknown kind %d", uint8(a)))
-	}
-}
-
-const messageVersion uint8 = 1
-
-// Message is a SWIM protocol message sent and received over UDP.
-type Message struct {
-	Version   uint8
-	Kind      messageKind
-	Period    uint64 // sender's protocol period counter; echoed back in acks
-	TargetLen uint8  // byte length of Target; 0 for ping and ack
-	Target    []byte // target peer address; only set in ping-req messages
-}
-
-// NewMessage creates a Message with Version set to [messageVersion].
-// Pass an empty target for ping and ack messages.
-// Panics if target exceeds [math.MaxUint8] bytes.
-func NewMessage(kind messageKind, period uint64, target string) Message {
-	if len(target) > math.MaxUint8 {
-		panic(fmt.Sprintf("swim: target address %q exceeds maximum length of %d", target, math.MaxUint8))
-	}
-	m := Message{
-		Version:   messageVersion,
-		Kind:      kind,
-		Period:    period,
-		TargetLen: uint8(len(target)),
-	}
-	if len(target) > 0 {
-		m.Target = []byte(target)
-	}
-	return m
-}
-
-const (
-	messageHeaderSize = 11 // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen)
-	maxTargetSize     = 47 // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
-	maxMessageSize    = messageHeaderSize + maxTargetSize
-)
-
-// MarshalBinary encodes the message into its wire format.
-func (m *Message) MarshalBinary() (data []byte, err error) {
-	b := make([]byte, messageHeaderSize+len(m.Target))
-	b[0] = messageVersion
-	b[1] = byte(m.Kind)
-	binary.BigEndian.PutUint64(b[2:10], m.Period)
-	b[10] = m.TargetLen
-	copy(b[11:], m.Target)
-	return b, nil
-}
-
-// UnmarshalBinary decodes a wire-format message into m.
-// Returns an error if data is too short, the version is unsupported, the kind
-// is unknown, or TargetLen does not match the remaining bytes.
-func (m *Message) UnmarshalBinary(data []byte) error {
-	if len(data) < messageHeaderSize {
-		return fmt.Errorf("message too short: need at least %d bytes for header, got %d", messageHeaderSize, len(data))
-	}
-	if data[0] != messageVersion {
-		return fmt.Errorf("unsupported message version: want %d, got %d", messageVersion, data[0])
-	}
-	kind := messageKind(data[1])
-	switch kind {
-	case ping, ack, pingReq:
-	default:
-		return fmt.Errorf("unknown message kind: %d", data[1])
-	}
-	targetLen := int(data[10])
-	if len(data[messageHeaderSize:]) != targetLen {
-		return fmt.Errorf("target length mismatch: header claims %d bytes, got %d", targetLen, len(data[messageHeaderSize:]))
-	}
-
-	m.Version = data[0]
-	m.Kind = kind
-	m.Period = binary.BigEndian.Uint64(data[2:10])
-	m.TargetLen = data[10]
-	if m.TargetLen > 0 {
-		m.Target = data[messageHeaderSize:]
-	}
-	return nil
-}
-
 // Ack is an acknowledgement received from a peer.
 type Ack struct {
 	Period uint64
 	Addr   net.Addr
 }
 
+// relayKey identifies a pending relay ack for a ping-req. Target is the address
+// of the node being pinged on behalf of the requester; Period is the initiator's
+// protocol period echoed in the ack. A struct key avoids ambiguity from string
+// concatenation (e.g. "1.2.3.4:56"+"78" vs "1.2.3.4:567"+"8").
+type relayKey struct {
+	target string
+	period uint64
+}
+
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are not yet handled.
 func (m *Member) Listen(ctx context.Context) {
+	relayAcks := make(map[relayKey]chan Ack)
+	var mu sync.RWMutex
+
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			b := make([]byte, maxMessageSize)
-			n, addr, err := m.conn.ReadFrom(b)
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) {
-					return
-				}
-				m.logger.Error("failed to read UDP message", "error", err)
-				continue
+		// TODO what if there are more bytes to be read than our max?
+		b := make([]byte, maxMessageSize)
+		n, addr, err := m.conn.ReadFrom(b)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
 			}
-			var msg Message
-			if err := msg.UnmarshalBinary(b[:n]); err != nil {
-				m.logger.Error("failed to parse message", "addr", addr, "error", err)
+			m.logger.Error("failed to read UDP message", "error", err)
+			continue
+		}
+		var msg Message
+		if err := msg.UnmarshalBinary(b[:n]); err != nil {
+			m.logger.Error("failed to parse message", "addr", addr, "error", err)
+			continue
+		}
+
+		m.logger.Debug("got message", "addr", addr, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
+		switch msg.Kind {
+		case ack:
+			// Non-blocking send: default is only taken when no other case can proceed, so the
+			// ack lands in the buffer if there is room and is dropped if the buffer is full
+			// (e.g. a stale ack is waiting). A dropped ack is harmless; the probe loop will
+			// fall back to indirect probing via ping-req on timeout.
+
+			c := m.acks
+			mu.RLock()
+			if d, ok := relayAcks[relayKey{target: addr.String(), period: msg.Period}]; ok {
+				c = d
+			}
+			mu.RUnlock()
+
+			select {
+			case c <- Ack{Period: msg.Period, Addr: addr}:
+			default:
+			}
+		case ping:
+			reply := NewMessage(ack, msg.Period, "")
+			m.sendToAddr(addr.String(), addr, reply) //nolint:errcheck
+		case pingReq:
+			if msg.TargetLen == 0 {
+				m.logger.Warn("message is missing required target for indirect ping", "addr", addr, "error", err)
 				continue
 			}
 
-			switch msg.Kind {
-			case ack:
-				m.logger.Debug("got ack", "addr", addr, "period", msg.Period)
-				// Non-blocking send: default is only taken when no other case can proceed, so the
-				// ack lands in the buffer if there is room and is dropped if the buffer is full
-				// (e.g. a stale ack is waiting). A dropped ack is harmless; the probe loop will
-				// fall back to indirect probing via ping-req on timeout.
-				select {
-				case m.acks <- Ack{Period: msg.Period, Addr: addr}:
-				default:
+			key := relayKey{target: string(msg.Target), period: msg.Period}
+			c := make(chan Ack, 1)
+			mu.Lock()
+			relayAcks[key] = c
+			mu.Unlock()
+
+			go func(acks <-chan Ack, done func()) {
+				defer done()
+
+				target := string(msg.Target)
+				// TODO should we log that we make this ping due to pingReq? or clear due to
+				m.logger.Debug("relay pingReq", "target", target)
+				// previous debug log?
+				ping := NewMessage(ping, msg.Period, "")
+				if err := m.send(target, ping); err != nil {
+					return
 				}
-			case ping:
-				msg := NewMessage(ack, msg.Period, "")
-				b, err := msg.MarshalBinary()
-				if err != nil {
-					panic(err)
+
+				// TODO
+				// If this is not received within a prespecified time-out
+				// (determined by the message round-trip time, which is cho-
+				// sen smaller than the protocol period), indirectly probes .
+				// selects members at random and sends each a
+				// ping-req( ) message. Each of these members in turn
+				// (those that are non-faulty), on receiving this message, pings
+				// and forwards the ack from
+				// (if received) back to
+				// . At the end of this protocol period,
+				// checks if it has
+				// received any acks, directly from
+				// or indirectly through
+				// one of the members; if not, it declares
+				// as failed in
+				// its local membership list, and hands this update off to the
+				// Dissemination Component.
+
+				ackTimeout := time.NewTimer(m.ackTimeout)
+				ackTimeout.Reset(m.ackTimeout)
+			waitAck:
+				for {
+					select {
+					case <-ctx.Done():
+						ackTimeout.Stop()
+						return
+					case <-ackTimeout.C:
+						// TODO anything we should do here? other than break, log?
+						break waitAck
+					case a := <-acks:
+						if a.Period == msg.Period && a.Addr.String() == target {
+							// TODO log something like this?
+							// m.logger.Debug("peer is alive", "peer", peer, "period", period)
+							ackTimeout.Stop()
+							ackMsg := NewMessage(ack, msg.Period, "")
+							err := m.sendToAddr(addr.String(), addr, ackMsg)
+							if err != nil {
+								continue
+							}
+							break waitAck
+						}
+					}
 				}
-				_, err = m.conn.WriteTo(b, addr)
-				if err != nil {
-					m.logger.Error("failed to send ack", "addr", addr, "error", err)
-					continue
-				}
-				m.logger.Debug("sent ack", "addr", addr, "period", msg.Period)
-			case pingReq:
-				// TODO implement subgroup
-				m.logger.Debug("got ping-req", "addr", addr, "period", msg.Period)
-			}
+			}(c, func() {
+				mu.Lock()
+				close(c)
+				delete(relayAcks, key)
+				mu.Unlock()
+			})
 		}
 	}
 }
@@ -328,17 +304,10 @@ type Notifier interface {
 func (m *Member) Probe(ctx context.Context) {
 	// TODO revisit if I can make this state-machine easier by adding state on Member? or creating a
 	// probe type with that state
-
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// TODO does it make sense to create this context with the ctx as parent?
-		periodCtx, periodCtxCancel := context.WithTimeoutCause(context.Background(), m.protocolPeriod, errors.New("period ended"))
+		errPeriodEnded := errors.New("period ended")
+		periodCtx, periodCtxCancel := context.WithTimeoutCause(ctx, m.protocolPeriod, errPeriodEnded)
 
 		period := m.period.Add(1)
 		m.muPeers.RLock() // TODO right now we don't actually need a lock on peers but guess its safer for future? or only add when needed
@@ -384,15 +353,21 @@ func (m *Member) Probe(ctx context.Context) {
 	waitAck:
 		for {
 			select {
-			case <-ctx.Done():
-				ackTimeout.Stop()
+			case <-periodCtx.Done():
+				// TODO deal with ended period here? but I only wanted to react to parent
 				periodCtxCancel()
-				return
+				ackTimeout.Stop()
+				if context.Cause(periodCtx) != errPeriodEnded {
+					return
+				}
 			case <-ackTimeout.C:
+				fmt.Println("foo")
 				// indirect ping
-				for k := 0; k < m.subgroupSize; {
+				// for k := 0; k < m.subgroupSize; {
+				for range m.subgroupSize {
+					fmt.Println("faa")
 					indirect := m.peer() // TODO better name for indirect?
-					if indirect == m.nodeID {
+					if indirect == peer {
 						continue
 					}
 					// TODO keep as is for now with kind and optional target? better name than
@@ -404,33 +379,35 @@ func (m *Member) Probe(ctx context.Context) {
 
 				for {
 					select {
-					case <-ctx.Done():
-						periodCtxCancel()
-						return
 					case <-periodCtx.Done():
+						periodCtxCancel()
+						if context.Cause(periodCtx) != errPeriodEnded {
+							return
+						}
+
 						m.muPeers.Lock()
 						m.peers = slices.DeleteFunc(m.peers, func(p string) bool {
 							return p == peer
 						})
 						m.muPeers.Unlock()
 						m.logger.Info("peer is dead", "peer", peer, "period", period)
+						// TODO call in separate go routine as this blocks Probe loop?
 						if m.notifier != nil {
 							m.notifier.Notify(peer, Dead)
 						}
-						periodCtxCancel()
 						break waitAck
-					case ack := <-m.acks:
+					case a := <-m.acks:
 						// TODO what are they sending back? is the ping-req Ack given a different
 						// ack?
-						if ack.Period == period && ack.Addr.String() == peer {
+						if a.Period == period && a.Addr.String() == peer {
 							m.logger.Debug("peer is alive", "peer", peer, "period", period)
 							periodCtxCancel()
 							break waitAck
 						}
 					}
 				}
-			case ack := <-m.acks:
-				if ack.Period == period && ack.Addr.String() == peer {
+			case a := <-m.acks:
+				if a.Period == period && a.Addr.String() == peer {
 					m.logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
 					periodCtxCancel()
@@ -445,6 +422,8 @@ func (m *Member) peer() string {
 	return m.peers[m.rng.IntN(len(m.peers))]
 }
 
+// TODO add that this will resolve peer in contrast to sendToAddr
+// send
 func (m *Member) send(peer string, msg Message) error {
 	// TODO better to create logger := m.logger.With with all fields or do as I currently do? what
 	// is more costly vs what is more readable?
@@ -454,6 +433,12 @@ func (m *Member) send(peer string, msg Message) error {
 		// TODO or not return an error but a bool? as I logged so this is handled?
 		return err
 	}
+	return m.sendToAddr(peer, addr, msg)
+}
+
+func (m *Member) sendToAddr(peer string, addr net.Addr, msg Message) error {
+	// TODO should this not get the peer and be more "low-level". we could pass in a logger so we
+	// can potentially attach a peer
 	b, err := msg.MarshalBinary()
 	if err != nil {
 		panic(err)

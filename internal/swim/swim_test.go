@@ -3,9 +3,9 @@ package swim_test
 import (
 	"context"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +27,7 @@ func TestNew(t *testing.T) {
 		ProtocolPeriod: 1 * time.Second,
 		AckTimeout:     500 * time.Millisecond,
 		SubgroupSize:   3,
+		Debug:          true,
 		Stderr:         io.Discard,
 	}
 
@@ -102,7 +103,9 @@ func TestNew(t *testing.T) {
 func TestProbeDirectSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 2)
-		c.start(t.Context())
+		ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.start(ctx)
 
 		// Several protocol periods: node 0 pings node 1, node 1 replies every time.
 		time.Sleep(3 * c.protocolPeriod)
@@ -121,7 +124,9 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		c := newCluster(t, 3)
 		c.partitionBetween(0, 1)
 
-		c.start(t.Context())
+		ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.start(ctx)
 
 		// Wait past the direct ack timeout and the indirect ack timeout so ping-req
 		// has had time to complete, but node 1 should survive via node 2.
@@ -144,7 +149,9 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		c := newCluster(t, 3)
 		c.partition(1)
 
-		c.start(t.Context())
+		ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.start(ctx)
 
 		// Wait past both the direct and indirect ack timeouts.
 		time.Sleep(c.protocolPeriod + c.ackTimeout*2)
@@ -162,7 +169,9 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		// Drop node 1 from the network so it never replies to pings.
 		c.partition(1)
 
-		c.start(t.Context())
+		ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.start(ctx)
 
 		// Wait past the ack timeout so node 0 declares node 1 dead.
 		time.Sleep(c.protocolPeriod + c.ackTimeout)
@@ -313,8 +322,9 @@ func newNetwork(t *testing.T, nodes int) *network {
 		require.NoError(t, err)
 		addr := l.LocalAddr().(*net.UDPAddr)
 		require.NoError(t, l.Close())
-		network.routes[addr.String()] = make(chan packet, 16)
-		network.conns[i] = &conn{network: network, addr: addr}
+		ch := make(chan packet, 16)
+		network.routes[addr.String()] = ch
+		network.conns[i] = &conn{network: network, addr: addr, ch: ch}
 	}
 	return network
 }
@@ -363,6 +373,7 @@ func (n *network) send(to string, from *net.UDPAddr, data []byte) {
 type conn struct {
 	network *network
 	addr    *net.UDPAddr
+	ch      chan packet // own receive channel, stored directly for durable blocking under synctest
 	closed  atomic.Bool
 }
 
@@ -370,13 +381,7 @@ func (c *conn) ReadFrom(b []byte) (int, net.Addr, error) {
 	if c.closed.Load() {
 		return 0, nil, net.ErrClosed
 	}
-	c.network.mu.Lock()
-	ch, ok := c.network.routes[c.addr.String()]
-	c.network.mu.Unlock()
-	if !ok {
-		return 0, nil, net.ErrClosed
-	}
-	p, ok := <-ch
+	p, ok := <-c.ch
 	if !ok {
 		return 0, nil, net.ErrClosed
 	}

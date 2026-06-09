@@ -2,6 +2,7 @@
 
 Implement basic failure detection algorithm of
   * fix: ping-req indirect probing
+  * add checksum to my message or can we use udp checksum itself?
   * cleanup:
     * make a send taking a context
     * use context style in Probe? better than my ticker?

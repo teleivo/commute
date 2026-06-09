@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,8 @@ func TestNew(t *testing.T) {
 		AdvertiseAddr:  "127.0.0.1:8080",
 		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
-		Stderr:         io.Discard,
+		Debug:          true,
+		Stderr:         t.Output(),
 	}
 
 	tests := map[string]struct {
@@ -559,7 +559,8 @@ func newTestServer(t *testing.T) *server.Server {
 		AdvertiseAddr:  "127.0.0.1:0",
 		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
-		Stderr:         io.Discard,
+		Debug:          true,
+		Stderr:         t.Output(),
 	})
 	require.NoError(t, err)
 	return srv
