@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -132,7 +134,7 @@ func run(args []string, _ io.Reader, _ io.Writer, wErr io.Writer) (int, error) {
 		nodeIDs = append(nodeIDs, id)
 	}
 	wg.Go(func() {
-		renderLoop(ctx, os.Stdout, nodeIDs, peers, addrToID, events)
+		renderLoop(ctx, os.Stdout, nodeIDs, peers, addrToID, events, assetPath("scientist.png"), assetPath("network-side.png"))
 	})
 
 	wg.Wait()
@@ -170,7 +172,7 @@ func (n *notifier) NotifyIndirectProbe(peer, relay string) {
 	n.events <- event{nodeID: n.nodeID, peer: peer, relay: relay, kind: memberIndirectProbe}
 }
 
-func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[string][]string, addrToID map[string]string, events <-chan event) {
+func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[string][]string, addrToID map[string]string, events <-chan event, scientistPNG, networkSidePNG string) {
 	// dead[nodeID][peerID] = true when nodeID considers peerID dead
 	dead := make(map[string]map[string]bool)
 	// waiting[nodeID][peerID] = true when nodeID sent ping-reqs and is waiting for an indirect ack
@@ -184,7 +186,7 @@ func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[st
 	}
 
 	render := func() {
-		dot := buildDOT(nodeIDs, peers, addrToID, dead, waiting, relaying)
+		dot := buildDOT(nodeIDs, peers, addrToID, dead, waiting, relaying, scientistPNG, networkSidePNG)
 		png, err := renderDOT(dot, 150)
 		if err != nil {
 			return
@@ -224,7 +226,7 @@ func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[st
 	}
 }
 
-func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]string, dead map[string]map[string]bool, waiting map[string]map[string]bool, relaying map[string]map[string]bool) string {
+func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]string, dead map[string]map[string]bool, waiting map[string]map[string]bool, relaying map[string]map[string]bool, scientistPNG, networkSidePNG string) string {
 	var b strings.Builder
 	b.WriteString("digraph swim {\n")
 	b.WriteString("  node [shape=circle]\n")
@@ -233,9 +235,9 @@ func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]s
 		case dead[id][id]:
 			fmt.Fprintf(&b, "  %q [color=red fontcolor=red]\n", id)
 		case len(relaying[id]) > 0:
-			fmt.Fprintf(&b, "  %q [color=orange fontcolor=orange]\n", id)
+			fmt.Fprintf(&b, "  %q [image=%q label=%q shape=none fixedsize=true imagescale=true width=1.2 height=1.2]\n", id, networkSidePNG, id)
 		case len(waiting[id]) > 0:
-			fmt.Fprintf(&b, "  %q [color=gray fontcolor=gray]\n", id)
+			fmt.Fprintf(&b, "  %q [image=%q label=%q shape=none fixedsize=true imagescale=true width=1.2 height=1.2]\n", id, scientistPNG, id)
 		default:
 			fmt.Fprintf(&b, "  %q\n", id)
 		}
@@ -300,4 +302,11 @@ func displayKitty(w io.Writer, png []byte) {
 		}
 	}
 	_, _ = fmt.Fprintln(w)
+}
+
+// assetPath returns the absolute path to a file in the assets directory next to this source file.
+// Gopher images in assets/ are from egonelbre/gophers (CC0): https://github.com/egonelbre/gophers
+func assetPath(name string) string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "assets", name)
 }
