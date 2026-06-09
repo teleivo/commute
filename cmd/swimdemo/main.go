@@ -195,6 +195,11 @@ func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[st
 	}
 
 	render()
+
+	debounce := time.NewTimer(0)
+	<-debounce.C
+	dirty := false
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -221,6 +226,12 @@ func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[st
 				}
 				dead[e.nodeID][peerID] = true
 			}
+			if !dirty {
+				debounce.Reset(200 * time.Millisecond)
+				dirty = true
+			}
+		case <-debounce.C:
+			dirty = false
 			render()
 		}
 	}
