@@ -117,8 +117,13 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
 	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port); must match exactly how this node appears in each peer's --peers list")
 	nodeID := flags.String("nodeid", "", "unique node identifier (required)")
-	peers := flags.String("peers", "", "comma-separated list of peer addresses (e.g. host1:7946,host2:7946)")
+	peers := flags.String("peers", "", "comma-separated list of peer HTTP addresses (e.g. host1:8080,host2:8080)")
 	gossipInterval := flags.Duration("gossipinterval", 5*time.Second, "how often to push state to a random peer")
+	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
+	swimPeers := flags.String("swim-peers", "", "comma-separated list of peer UDP addresses for SWIM (e.g. host1:7946,host2:7946)")
+	swimProtocolPeriod := flags.Duration("swim-protocol-period", 1*time.Second, "SWIM protocol period (T' in the paper)")
+	swimAckTimeout := flags.Duration("swim-ack-timeout", 500*time.Millisecond, "how long to wait for a direct ack before indirect probing")
+	swimSubgroupSize := flags.Int("swim-subgroup-size", 3, "number of nodes used for indirect probing (k in the paper)")
 	debug := flags.Bool("debug", false, "enable debug logging")
 	cpuProfile := flags.String("cpuprofile", "", "write cpu profile to `file`")
 	memProfile := flags.String("memprofile", "", "write memory profile to `file`")
@@ -141,12 +146,22 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if _, _, err := net.SplitHostPort(*advertiseAddr); err != nil {
 		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
 	}
+	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
+		return 2, fmt.Errorf("invalid swim-addr %q: %s", *swimAddr, err)
+	}
+	if *swimPeers == "" {
+		return 2, errors.New("swim-peers is required")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	err = profile(func() error {
 		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			return err
+		}
+		swimConn, err := net.ListenPacket("udp", *swimAddr)
 		if err != nil {
 			return err
 		}
@@ -162,6 +177,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		if err != nil {
 			return err
 		}
+		_ = swimConn // TODO: wire into server
 		return srv.Start(ctx)
 	}, *cpuProfile, *memProfile, *traceProfile)
 	if err != nil {

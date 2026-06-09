@@ -2,11 +2,15 @@
 
 Implement basic failure detection algorithm of
   * integrate swim into commute
-    * add RemovePeer (or similar) method to server.Server so the Notifier implementation can evict
-      dead peers from the gossip list after construction
     * networking: bind a separate UDP port for SWIM (e.g. --swim-addr :7946) in main.go via
       net.ListenPacket, independent of the TCP listener; add --swim-peers flag (host:port list for
       UDP peers, distinct from --peers which are TCP gossip peers)
+    * wire swim into main.go (option B / memberlist-style delegate pattern):
+      * add RemovePeer to server.Server (needs a mutex on peers) so it is safe to call concurrently
+      * add peerNotifier delegate in main.go implementing swim.Notifier; holds a *server.Server set
+        after server.New returns; calls server.RemovePeer on Dead events
+      * construct swim.Member in main.go with the notifier, pass to server.Start to run alongside
+        the gossip and HTTP loops
   * create a buffer pool for reading message? and something else?
   * membership events piggybacked on gossip messages?
     * call notifier in a goroutine as it will block the Probe and can thus get us off track from the
