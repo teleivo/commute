@@ -38,11 +38,10 @@ type Member struct {
 	notifier       Notifier
 }
 
-// TODO now that we use net.PacketConn could this be a non udp impl?
 // Config holds the configuration for creating a Member.
 type Config struct {
 	NodeID         string
-	Conn           net.PacketConn                      // connection to receive and send packets on
+	Conn           net.PacketConn                      // UDP connection to receive and send packets on
 	Peers          string                              // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
 	ProtocolPeriod time.Duration                       // T' in the paper: duration of one failure detection round; must be at least 3× the estimated round-trip time
 	AckTimeout     time.Duration                       // how long to wait for a direct ack before declaring a peer dead; must be less than ProtocolPeriod
@@ -174,7 +173,6 @@ func (m *Member) Listen(ctx context.Context) {
 	var mu sync.RWMutex
 
 	for {
-		// TODO what if there are more bytes to be read than our max?
 		b := make([]byte, maxMessageSize)
 		n, addr, err := m.conn.ReadFrom(b)
 		if err != nil {
@@ -359,12 +357,7 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
-				// TODO do I need to stop? what is the benefit? 1.23+ godoc says not necessarily
-				// needed anymore and since we loop back we do Reset and on return we have defer
 				ackTimeout.Stop()
-				// TODO in theory these locks could also mean we keep extending our time in between
-				// periodS no? but doing all of this in another goroutine is odd as we need an up to
-				// date m.peers for next iter
 				m.muPeers.Lock()
 				m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
 				delete(m.peerAddrs, peer)
@@ -410,8 +403,6 @@ func (m *Member) send(peer string, msg Message) error {
 }
 
 func (m *Member) sendToAddr(peer string, addr net.Addr, msg Message) error {
-	// TODO should this not get the peer and be more "low-level". we could pass in a logger so we
-	// can potentially attach a peer
 	b, err := msg.MarshalBinary()
 	if err != nil {
 		panic(err)

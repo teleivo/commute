@@ -1,14 +1,9 @@
 # TODO
 
 Implement basic failure detection algorithm of
-  * fix: ping-req indirect probing
-  * add checksum to my message or can we use udp checksum itself?
   * cleanup:
     * make a send take a context; is that when transitioning from periodTimer to context makes
     sense?
-    * use context style in Probe? better than my ticker?
-    * keep as is or go for some kind of probe struct with state machine? or wait until I implement
-    suspicion
   * membership events piggybacked on gossip messages?
   * integrate swim into commute
   * merge to main
