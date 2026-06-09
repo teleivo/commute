@@ -280,6 +280,9 @@ func (e EventKind) String() string {
 // Notifier is called by a Member when a peer's membership status changes.
 type Notifier interface {
 	Notify(peer string, kind EventKind)
+	// NotifyIndirectProbe is called when direct ping to peer timed out and relay
+	// has been asked to send a ping-req on the member's behalf.
+	NotifyIndirectProbe(peer, relay string)
 }
 
 // Probe runs the failure detection loop: once per protocol period it picks a
@@ -345,6 +348,9 @@ func (m *Member) Probe(ctx context.Context) {
 						if indirect != peer {
 							break
 						}
+					}
+					if m.notifier != nil {
+						m.notifier.NotifyIndirectProbe(peer, indirect)
 					}
 					_ = m.send(indirect, NewMessage(pingReq, period, peer))
 				}

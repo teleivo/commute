@@ -280,6 +280,8 @@ func (r *recordingNotifier) Notify(peer string, kind swim.EventKind) {
 	}
 }
 
+func (r *recordingNotifier) NotifyIndirectProbe(_, _ string) {}
+
 func (r *recordingNotifier) dead() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

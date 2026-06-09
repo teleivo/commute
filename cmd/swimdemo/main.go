@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -95,9 +96,8 @@ func run(args []string, _ io.Reader, _ io.Writer, wErr io.Writer) (int, error) {
 			ProtocolPeriod: *protocolPeriod,
 			AckTimeout:     *ackTimeout,
 			SubgroupSize:   *subgroupSize,
-			Notifier:       &notifier{nodeID: nodeID, events: events},
-			Debug:          *debug,
-			Stderr:         os.Stderr,
+			Notifier: &notifier{nodeID: nodeID, events: events},
+			Logger:   nodeLogger(nodeID, *debug, wErr),
 		})
 		if err != nil {
 			return 1, err
@@ -123,7 +123,7 @@ func run(args []string, _ io.Reader, _ io.Writer, wErr io.Writer) (int, error) {
 				nodeID = "node-2"
 			}
 			fns[nodeID]()
-			events <- event{nodeID: nodeID, peer: nodeID, kind: swim.Dead}
+			events <- event{nodeID: nodeID, peer: nodeID, kind: memberDead}
 		}
 	}()
 
@@ -143,8 +143,16 @@ func run(args []string, _ io.Reader, _ io.Writer, wErr io.Writer) (int, error) {
 type event struct {
 	nodeID string
 	peer   string
-	kind   swim.EventKind
+	relay  string // set for indirectProbe events: the node asked to relay the ping-req
+	kind   eventKind
 }
+
+type eventKind uint8
+
+const (
+	memberDead eventKind = iota
+	memberIndirectProbe
+)
 
 // notifier implements swim.Notifier and forwards changes as events onto a channel.
 type notifier struct {
@@ -153,18 +161,30 @@ type notifier struct {
 }
 
 func (n *notifier) Notify(peer string, kind swim.EventKind) {
-	n.events <- event{nodeID: n.nodeID, peer: peer, kind: kind}
+	if kind == swim.Dead {
+		n.events <- event{nodeID: n.nodeID, peer: peer, kind: memberDead}
+	}
+}
+
+func (n *notifier) NotifyIndirectProbe(peer, relay string) {
+	n.events <- event{nodeID: n.nodeID, peer: peer, relay: relay, kind: memberIndirectProbe}
 }
 
 func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[string][]string, addrToID map[string]string, events <-chan event) {
-	// dead tracks which nodes each member considers dead: dead[nodeID][peerID] = true
+	// dead[nodeID][peerID] = true when nodeID considers peerID dead
 	dead := make(map[string]map[string]bool)
+	// waiting[nodeID][peerID] = true when nodeID sent ping-reqs and is waiting for an indirect ack
+	waiting := make(map[string]map[string]bool)
+	// relaying[relayID][peerID] = true when relayID was asked to indirect-probe peerID
+	relaying := make(map[string]map[string]bool)
 	for _, id := range nodeIDs {
 		dead[id] = make(map[string]bool)
+		waiting[id] = make(map[string]bool)
+		relaying[id] = make(map[string]bool)
 	}
 
 	render := func() {
-		dot := buildDOT(nodeIDs, peers, addrToID, dead)
+		dot := buildDOT(nodeIDs, peers, addrToID, dead, waiting, relaying)
 		png, err := renderDOT(dot, 150)
 		if err != nil {
 			return
@@ -180,38 +200,76 @@ func renderLoop(ctx context.Context, w io.Writer, nodeIDs []string, peers map[st
 		case e := <-events:
 			peerID := addrToID[e.peer]
 			if peerID == "" {
-				// peer is already a node ID (e.g. from SIGUSR signal)
 				peerID = e.peer
 			}
-			dead[e.nodeID][peerID] = true
+			relayID := addrToID[e.relay]
+			if relayID == "" {
+				relayID = e.relay
+			}
+			switch e.kind {
+			case memberIndirectProbe:
+				waiting[e.nodeID][peerID] = true
+				if relayID != "" {
+					relaying[relayID][peerID] = true
+				}
+			case memberDead:
+				delete(waiting[e.nodeID], peerID)
+				for _, id := range nodeIDs {
+					delete(relaying[id], peerID)
+				}
+				dead[e.nodeID][peerID] = true
+			}
 			render()
 		}
 	}
 }
 
-func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]string, dead map[string]map[string]bool) string {
+func buildDOT(nodeIDs []string, peers map[string][]string, addrToID map[string]string, dead map[string]map[string]bool, waiting map[string]map[string]bool, relaying map[string]map[string]bool) string {
 	var b strings.Builder
 	b.WriteString("digraph swim {\n")
 	b.WriteString("  node [shape=circle]\n")
 	for _, id := range nodeIDs {
-		if dead[id][id] {
+		switch {
+		case dead[id][id]:
 			fmt.Fprintf(&b, "  %q [color=red fontcolor=red]\n", id)
-		} else {
+		case len(relaying[id]) > 0:
+			fmt.Fprintf(&b, "  %q [color=orange fontcolor=orange]\n", id)
+		case len(waiting[id]) > 0:
+			fmt.Fprintf(&b, "  %q [color=gray fontcolor=gray]\n", id)
+		default:
 			fmt.Fprintf(&b, "  %q\n", id)
 		}
 	}
 	for _, id := range nodeIDs {
 		for _, peerAddr := range peers[id] {
 			peerID := addrToID[peerAddr]
-			color := "black"
-			if dead[id][peerID] {
-				color = "red"
+			var attrs string
+			switch {
+			case dead[id][peerID]:
+				attrs = "color=red"
+			case relaying[id][peerID]:
+				attrs = "color=orange style=dashed"
+			case waiting[id][peerID]:
+				attrs = "color=gray style=dashed"
+			default:
+				attrs = "color=black"
 			}
-			fmt.Fprintf(&b, "  %q -> %q [color=%s]\n", id, peerID, color)
+			fmt.Fprintf(&b, "  %q -> %q [%s]\n", id, peerID, attrs)
 		}
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func nodeLogger(nodeID string, debug bool, w io.Writer) *slog.Logger {
+	if !debug {
+		return slog.New(slog.DiscardHandler)
+	}
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})).With("node_id", nodeID)
 }
 
 func renderDOT(dot string, dpi int) ([]byte, error) {
