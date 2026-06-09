@@ -138,6 +138,8 @@ func TestProbeIndirectSuccess(t *testing.T) {
 	})
 }
 
+// TODO tests are flak y
+
 // TestProbeIndirectFailPeerDead verifies that a peer unreachable both directly and via all
 // intermediaries is declared dead after indirect probing fails.
 func TestProbeIndirectFailPeerDead(t *testing.T) {

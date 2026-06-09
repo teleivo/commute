@@ -295,43 +295,37 @@ type Notifier interface {
 // random peer, sends a ping, and waits up to AckTimeout for a direct ack before
 // declaring the peer dead and removing it from the peer list.
 func (m *Member) Probe(ctx context.Context) {
-	// TODO revisit if I can make this state-machine easier by adding state on Member? or creating a
-	// probe type with that state
-	ackTimeout := time.NewTimer(m.ackTimeout)
-	if !ackTimeout.Stop() {
-		<-ackTimeout.C
-	}
 	periodTimer := time.NewTimer(m.protocolPeriod)
-	if !periodTimer.Stop() {
-		<-periodTimer.C
-	}
+	defer periodTimer.Stop()
+	ackTimeout := time.NewTimer(m.ackTimeout)
+	defer ackTimeout.Stop()
+
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
+		periodTimer.Reset(m.protocolPeriod)
 		period := m.period.Add(1)
+
 		m.muPeers.RLock()
 		if len(m.peers) == 0 {
 			m.muPeers.RUnlock()
 			m.logger.Warn("no peers to probe")
-			periodTimer.Reset(m.protocolPeriod)
 			select {
 			case <-ctx.Done():
-				periodTimer.Stop()
 				return
 			case <-periodTimer.C:
 			}
 			continue
 		}
-		peer := m.peer()
+		peer := m.randomPeer()
 		m.muPeers.RUnlock()
 
+		// direct ping
 		if err := m.send(peer, NewMessage(ping, period, "")); err != nil {
-			periodTimer.Reset(m.protocolPeriod)
 			select {
 			case <-ctx.Done():
-				periodTimer.Stop()
 				return
 			case <-periodTimer.C:
 			}
@@ -339,59 +333,60 @@ func (m *Member) Probe(ctx context.Context) {
 		}
 
 		ackTimeout.Reset(m.ackTimeout)
-		periodTimer.Reset(m.protocolPeriod)
-		alive := false
 	waitAck:
 		for {
 			select {
 			case <-ctx.Done():
-				ackTimeout.Stop()
-				periodTimer.Stop()
 				return
 			case <-ackTimeout.C:
-				// direct ack timed out — send ping-req to subgroup members
+				// indirect ping-req as we did not receive an ack to direct ping on time
 				m.muPeers.RLock()
 				hasCandidates := len(m.peers) > 1
 				m.muPeers.RUnlock()
-				if hasCandidates {
-					for range m.subgroupSize {
-						var indirect string
-						for {
-							indirect = m.peer()
-							if indirect != peer {
-								break
-							}
+				if !hasCandidates {
+					continue
+				}
+
+				for range m.subgroupSize {
+					var indirect string
+					for {
+						indirect = m.randomPeer()
+						if indirect != peer {
+							break
 						}
-						_ = m.send(indirect, NewMessage(pingReq, period, peer))
 					}
+					_ = m.send(indirect, NewMessage(pingReq, period, peer))
 				}
 			case <-periodTimer.C:
-				// period ended — declare peer dead if no ack received
+				// period ended so peer is declared dead
 				ackTimeout.Stop()
-				if !alive {
-					m.muPeers.Lock()
-					m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
-					delete(m.peerAddrs, peer)
-					m.muPeers.Unlock()
-					m.logger.Info("peer is dead", "peer", peer, "period", period)
-					if m.notifier != nil {
-						m.notifier.Notify(peer, Dead)
-					}
+				m.muPeers.Lock()
+				m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
+				delete(m.peerAddrs, peer)
+				m.muPeers.Unlock()
+				m.logger.Info("peer is dead", "peer", peer, "period", period)
+				if m.notifier != nil {
+					m.notifier.Notify(peer, Dead)
 				}
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr.String() == peer {
 					m.logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
-					alive = true
 					// Period still running; wait for it to expire before next probe.
+					select {
+					case <-ctx.Done():
+						return
+					case <-periodTimer.C:
+					}
+					break waitAck
 				}
 			}
 		}
 	}
 }
 
-func (m *Member) peer() string {
+func (m *Member) randomPeer() string {
 	return m.peers[m.rng.IntN(len(m.peers))]
 }
 
