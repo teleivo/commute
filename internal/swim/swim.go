@@ -13,7 +13,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net"
-	"net/netip"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -43,14 +43,14 @@ type Config struct {
 	NodeID         string
 	Conn           net.PacketConn                      // UDP connection to receive and send packets on
 	Peers          string                              // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
-	ProtocolPeriod time.Duration                       // T' in the paper: duration of one failure detection round; must be at least 3× the estimated round-trip time
-	AckTimeout     time.Duration                       // how long to wait for a direct ack before declaring a peer dead; must be less than ProtocolPeriod
+	Resolve        func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
+	ProtocolPeriod time.Duration                       // T' in the paper: duration of one failure detection round
+	AckTimeout     time.Duration                       // how long to wait for a direct ack before declaring a peer dead
 	SubgroupSize   int                                 // k in the paper: number of members used for indirect probing
-	Notifier       Notifier                            // optional; called when a peer's membership status changes
-	Resolve        func(addr string) (net.Addr, error) // optional; resolves a peer address string to a net.Addr; defaults to net.ResolveUDPAddr
+	Notifier       Notifier                            // if nil, membership changes are not reported
 	Rng            *rand.Rand                          // random source for peer selection
 	Debug          bool                                // enable debug logging
-	Stderr         io.Writer                           // output for error logging
+	Stderr         io.Writer                           // output for logging, defaults to os.Stderr
 }
 
 // New creates a Member from the given Config.
@@ -101,11 +101,15 @@ func New(cfg Config) (*Member, error) {
 		return nil, errors.New("subgroup size must be greater than zero")
 	}
 
+	stderr := cfg.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	level := slog.LevelInfo
 	if cfg.Debug {
 		level = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	logger = logger.With(
 		slog.String("component", "swim"),
 		slog.String("node_id", cfg.NodeID),
@@ -154,7 +158,7 @@ func (m *Member) Start(ctx context.Context) error {
 // Ack is an acknowledgement received from a peer.
 type Ack struct {
 	Period uint64
-	Addr   net.Addr
+	Addr   string
 }
 
 // relayKey identifies a pending relay ack for a ping-req. Target is the address
@@ -167,7 +171,7 @@ type relayKey struct {
 }
 
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
-// the Probe loop; pings are answered immediately; ping-reqs are not yet handled.
+// the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
 func (m *Member) Listen(ctx context.Context) {
 	relayAcks := make(map[relayKey]chan Ack)
 	var mu sync.RWMutex
@@ -191,34 +195,31 @@ func (m *Member) Listen(ctx context.Context) {
 		m.logger.Debug("got message", "addr", addr, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
 		switch msg.Kind {
 		case ack:
-			// Non-blocking send: default is only taken when no other case can proceed, so the
-			// ack lands in the buffer if there is room and is dropped if the buffer is full
-			// (e.g. a stale ack is waiting). A dropped ack is harmless; the probe loop will
-			// fall back to indirect probing via ping-req on timeout.
-
-			// A relay ack carries the original probe target in Target so we can route it
-			// to the right relay waiter and deliver an Ack as if it came from the target.
-			ackAddr := addr
+			// relay ack carries the original probe target in Target so we can route it
+			// to the right relay waiter and deliver an Ack as if it came from the target
+			ackAddr := addr.String()
 			if msg.TargetLen > 0 {
-				if ap, err := netip.ParseAddrPort(string(msg.Target)); err == nil {
-					ackAddr = net.UDPAddrFromAddrPort(ap)
-				}
+				ackAddr = string(msg.Target)
 			}
 
-			c := m.acks
+			ackCh := m.acks
 			mu.RLock()
-			if d, ok := relayAcks[relayKey{target: ackAddr.String(), period: msg.Period}]; ok {
-				c = d
+			if ch, ok := relayAcks[relayKey{target: ackAddr, period: msg.Period}]; ok {
+				ackCh = ch
 			}
 			mu.RUnlock()
 
+			// non-blocking send: default is only taken when no other case can proceed, so the ack
+			// lands in the buffer if there is room and is dropped if the buffer is full (e.g. a
+			// stale ack is waiting). A dropped ack is harmless as the probe loop will fall back to
+			// indirect probing via ping-req on timeout.
 			select {
-			case c <- Ack{Period: msg.Period, Addr: ackAddr}:
+			case ackCh <- Ack{Period: msg.Period, Addr: ackAddr}:
 			default:
 			}
 		case ping:
 			reply := NewMessage(ack, msg.Period, "")
-			m.sendToAddr(addr.String(), addr, reply) //nolint:errcheck
+			_ = m.sendToAddr(addr.String(), addr, reply)
 		case pingReq:
 			if msg.TargetLen == 0 {
 				m.logger.Warn("message is missing required target for indirect ping", "addr", addr, "error", err)
@@ -226,38 +227,38 @@ func (m *Member) Listen(ctx context.Context) {
 			}
 
 			key := relayKey{target: string(msg.Target), period: msg.Period}
-			c := make(chan Ack, 1)
+			ackCh := make(chan Ack, 1)
 			mu.Lock()
-			relayAcks[key] = c
+			relayAcks[key] = ackCh
 			mu.Unlock()
 
 			go func(acks <-chan Ack, done func()) {
 				defer done()
 
 				target := string(msg.Target)
-				m.logger.Debug("relay pingReq", "target", target)
 				if err := m.send(target, NewMessage(ping, msg.Period, "")); err != nil {
 					return
 				}
 
-				ackTimer := time.NewTimer(m.ackTimeout)
+				ackTimeout := time.NewTimer(m.ackTimeout)
 			waitAck:
 				for {
 					select {
-					case <-ackTimer.C:
+					case <-ackTimeout.C:
 						break waitAck
 					case a := <-acks:
-						if a.Period == msg.Period && a.Addr.String() == target {
-							ackTimer.Stop()
-							// Carry the target in the relay ack so the requester can route it.
-							m.sendToAddr(addr.String(), addr, NewMessage(ack, msg.Period, target)) //nolint:errcheck
+						if a.Period == msg.Period && a.Addr == target {
+							ackTimeout.Stop()
+							// carry the target in the relay ack so the requester can route it and
+							// distinguish from a ping it might have sent to the target itself
+							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, msg.Period, target))
 							break waitAck
 						}
 					}
 				}
-			}(c, func() {
+			}(ackCh, func() {
 				mu.Lock()
-				close(c)
+				close(ackCh)
 				delete(relayAcks, key)
 				mu.Unlock()
 			})
@@ -364,13 +365,11 @@ func (m *Member) Probe(ctx context.Context) {
 				m.muPeers.Unlock()
 				m.logger.Info("peer is dead", "peer", peer, "period", period)
 				if m.notifier != nil {
-					// TODO call this in a goroutine as it will block the Probe and can thus get us
-					// off track from the proto period
 					m.notifier.Notify(peer, Dead)
 				}
 				break waitAck
 			case a := <-m.acks:
-				if a.Period == period && a.Addr.String() == peer {
+				if a.Period == period && a.Addr == peer {
 					m.logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
 					// wait for the period to expire before moving on to the next probe

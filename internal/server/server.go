@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"maps"
 	"math/rand/v2"
 	"net"
@@ -48,7 +49,7 @@ type Config struct {
 	Rng            *rand.Rand    // random source for peer selection
 	Clock          crdt.Clock    // clock for LWW timestamps
 	Debug          bool          // enable debug logging
-	Stderr         io.Writer     // output for error logging
+	Stderr         io.Writer     // output for logging, defaults to os.Stderr
 }
 
 // New creates a Server with the given configuration.
@@ -81,11 +82,15 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("gossip interval must be greater than zero")
 	}
 
+	stderr := cfg.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	level := slog.LevelInfo
 	if cfg.Debug {
 		level = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewTextHandler(cfg.Stderr, &slog.HandlerOptions{Level: level}))
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	logger = logger.With(
 		slog.String("node_id", cfg.NodeID),
 		slog.String("advertise_addr", cfg.AdvertiseAddr),
