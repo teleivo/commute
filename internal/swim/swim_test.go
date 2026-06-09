@@ -104,14 +104,14 @@ func TestProbeDirectSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 2)
 		ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			c.start(ctx)
+		c.start(ctx)
 
 		// Several protocol periods: node 0 pings node 1, node 1 replies every time.
 		time.Sleep(3 * c.protocolPeriod)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string(nil))
+		cancel()
 	})
 }
 
@@ -125,8 +125,7 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		c.partitionBetween(0, 1)
 
 		ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			c.start(ctx)
+		c.start(ctx)
 
 		// Wait past the direct ack timeout and the indirect ack timeout so ping-req
 		// has had time to complete, but node 1 should survive via node 2.
@@ -135,10 +134,9 @@ func TestProbeIndirectSuccess(t *testing.T) {
 
 		assert.EqualValues(t, c.dead(0), []string(nil))
 		assert.EqualValues(t, c.dead(2), []string(nil))
+		cancel()
 	})
 }
-
-// TODO tests are flak y
 
 // TestProbeIndirectFailPeerDead verifies that a peer unreachable both directly and via all
 // intermediaries is declared dead after indirect probing fails.
@@ -150,8 +148,7 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			c.start(ctx)
+		c.start(ctx)
 
 		// Wait past both the direct and indirect ack timeouts.
 		time.Sleep(c.protocolPeriod + c.ackTimeout*2)
@@ -159,6 +156,7 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
 		// assert.EqualValues(t, c.dead(2), []string{c.addr(1)})
+		cancel()
 	})
 }
 
@@ -170,14 +168,14 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			c.start(ctx)
+		c.start(ctx)
 
 		// Wait past the ack timeout so node 0 declares node 1 dead.
 		time.Sleep(c.protocolPeriod + c.ackTimeout)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
+		cancel()
 	})
 }
 
@@ -378,9 +376,6 @@ type conn struct {
 }
 
 func (c *conn) ReadFrom(b []byte) (int, net.Addr, error) {
-	if c.closed.Load() {
-		return 0, nil, net.ErrClosed
-	}
 	p, ok := <-c.ch
 	if !ok {
 		return 0, nil, net.ErrClosed

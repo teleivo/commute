@@ -13,6 +13,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type Member struct {
 	nodeID         string
 	conn           net.PacketConn
 	peers          []string
+	peerAddrs      map[string]net.Addr // pre-resolved at New time; guarded by muPeers
 	muPeers        sync.RWMutex
 	protocolPeriod time.Duration
 	ackTimeout     time.Duration
@@ -63,7 +65,14 @@ func New(cfg Config) (*Member, error) {
 	if cfg.Peers == "" {
 		return nil, errors.New("at least one peer is required")
 	}
+	resolve := cfg.Resolve
+	if resolve == nil {
+		resolve = func(addr string) (net.Addr, error) {
+			return net.ResolveUDPAddr("udp", addr)
+		}
+	}
 	peers := make(map[string]struct{})
+	peerAddrs := make(map[string]net.Addr)
 	for p := range strings.SplitSeq(cfg.Peers, ",") {
 		p = strings.TrimSpace(p)
 		host, port, err := net.SplitHostPort(p)
@@ -73,7 +82,12 @@ func New(cfg Config) (*Member, error) {
 		if host == "" || port == "" {
 			return nil, fmt.Errorf("invalid peer %q: host and port are required", p)
 		}
+		addr, err := resolve(p)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve peer %q: %w", p, err)
+		}
 		peers[p] = struct{}{}
+		peerAddrs[p] = addr
 	}
 	if cfg.ProtocolPeriod <= 0 {
 		return nil, errors.New("protocol period must be greater than zero")
@@ -106,6 +120,7 @@ func New(cfg Config) (*Member, error) {
 		nodeID:         cfg.NodeID,
 		conn:           cfg.Conn,
 		peers:          slices.Sorted(maps.Keys(peers)),
+		peerAddrs:      peerAddrs,
 		protocolPeriod: cfg.ProtocolPeriod,
 		ackTimeout:     cfg.AckTimeout,
 		subgroupSize:   cfg.SubgroupSize,
@@ -183,15 +198,24 @@ func (m *Member) Listen(ctx context.Context) {
 			// (e.g. a stale ack is waiting). A dropped ack is harmless; the probe loop will
 			// fall back to indirect probing via ping-req on timeout.
 
+			// A relay ack carries the original probe target in Target so we can route it
+			// to the right relay waiter and deliver an Ack as if it came from the target.
+			ackAddr := addr
+			if msg.TargetLen > 0 {
+				if ap, err := netip.ParseAddrPort(string(msg.Target)); err == nil {
+					ackAddr = net.UDPAddrFromAddrPort(ap)
+				}
+			}
+
 			c := m.acks
 			mu.RLock()
-			if d, ok := relayAcks[relayKey{target: addr.String(), period: msg.Period}]; ok {
+			if d, ok := relayAcks[relayKey{target: ackAddr.String(), period: msg.Period}]; ok {
 				c = d
 			}
 			mu.RUnlock()
 
 			select {
-			case c <- Ack{Period: msg.Period, Addr: addr}:
+			case c <- Ack{Period: msg.Period, Addr: ackAddr}:
 			default:
 			}
 		case ping:
@@ -213,53 +237,22 @@ func (m *Member) Listen(ctx context.Context) {
 				defer done()
 
 				target := string(msg.Target)
-				// TODO should we log that we make this ping due to pingReq? or clear due to
 				m.logger.Debug("relay pingReq", "target", target)
-				// previous debug log?
-				ping := NewMessage(ping, msg.Period, "")
-				if err := m.send(target, ping); err != nil {
+				if err := m.send(target, NewMessage(ping, msg.Period, "")); err != nil {
 					return
 				}
 
-				// TODO
-				// If this is not received within a prespecified time-out
-				// (determined by the message round-trip time, which is cho-
-				// sen smaller than the protocol period), indirectly probes .
-				// selects members at random and sends each a
-				// ping-req( ) message. Each of these members in turn
-				// (those that are non-faulty), on receiving this message, pings
-				// and forwards the ack from
-				// (if received) back to
-				// . At the end of this protocol period,
-				// checks if it has
-				// received any acks, directly from
-				// or indirectly through
-				// one of the members; if not, it declares
-				// as failed in
-				// its local membership list, and hands this update off to the
-				// Dissemination Component.
-
-				ackTimeout := time.NewTimer(m.ackTimeout)
-				ackTimeout.Reset(m.ackTimeout)
+				ackTimer := time.NewTimer(m.ackTimeout)
 			waitAck:
 				for {
 					select {
-					case <-ctx.Done():
-						ackTimeout.Stop()
-						return
-					case <-ackTimeout.C:
-						// TODO anything we should do here? other than break, log?
+					case <-ackTimer.C:
 						break waitAck
 					case a := <-acks:
 						if a.Period == msg.Period && a.Addr.String() == target {
-							// TODO log something like this?
-							// m.logger.Debug("peer is alive", "peer", peer, "period", period)
-							ackTimeout.Stop()
-							ackMsg := NewMessage(ack, msg.Period, "")
-							err := m.sendToAddr(addr.String(), addr, ackMsg)
-							if err != nil {
-								continue
-							}
+							ackTimer.Stop()
+							// Carry the target in the relay ack so the requester can route it.
+							m.sendToAddr(addr.String(), addr, NewMessage(ack, msg.Period, target)) //nolint:errcheck
 							break waitAck
 						}
 					}
@@ -305,113 +298,93 @@ func (m *Member) Probe(ctx context.Context) {
 	// TODO revisit if I can make this state-machine easier by adding state on Member? or creating a
 	// probe type with that state
 	ackTimeout := time.NewTimer(m.ackTimeout)
+	if !ackTimeout.Stop() {
+		<-ackTimeout.C
+	}
+	periodTimer := time.NewTimer(m.protocolPeriod)
+	if !periodTimer.Stop() {
+		<-periodTimer.C
+	}
 	for {
-		errPeriodEnded := errors.New("period ended")
-		periodCtx, periodCtxCancel := context.WithTimeoutCause(ctx, m.protocolPeriod, errPeriodEnded)
+		if ctx.Err() != nil {
+			return
+		}
 
 		period := m.period.Add(1)
-		m.muPeers.RLock() // TODO right now we don't actually need a lock on peers but guess its safer for future? or only add when needed
+		m.muPeers.RLock()
 		if len(m.peers) == 0 {
 			m.muPeers.RUnlock()
 			m.logger.Warn("no peers to probe")
-			periodCtxCancel()
+			periodTimer.Reset(m.protocolPeriod)
+			select {
+			case <-ctx.Done():
+				periodTimer.Stop()
+				return
+			case <-periodTimer.C:
+			}
 			continue
 		}
 		peer := m.peer()
 		m.muPeers.RUnlock()
 
-		// direct ping
-		msg := NewMessage(ping, period, "")
-		// TODO is this blocking? can I make a send taking a context that times out when send blocks
-		// to long?
-		if err := m.send(peer, msg); err != nil {
-			// TODO without a ticker we need to wait the periodCtx so we don't probe more frequent
-			<-periodCtx.Done()
-			periodCtxCancel()
+		if err := m.send(peer, NewMessage(ping, period, "")); err != nil {
+			periodTimer.Reset(m.protocolPeriod)
+			select {
+			case <-ctx.Done():
+				periodTimer.Stop()
+				return
+			case <-periodTimer.C:
+			}
 			continue
 		}
 
-		// TODO
-		// If this is not received within a prespecified time-out
-		// (determined by the message round-trip time, which is cho-
-		// sen smaller than the protocol period), indirectly probes .
-		// selects members at random and sends each a
-		// ping-req( ) message. Each of these members in turn
-		// (those that are non-faulty), on receiving this message, pings
-		// and forwards the ack from
-		// (if received) back to
-		// . At the end of this protocol period,
-		// checks if it has
-		// received any acks, directly from
-		// or indirectly through
-		// one of the members; if not, it declares
-		// as failed in
-		// its local membership list, and hands this update off to the
-		// Dissemination Component.
-
 		ackTimeout.Reset(m.ackTimeout)
+		periodTimer.Reset(m.protocolPeriod)
+		alive := false
 	waitAck:
 		for {
 			select {
-			case <-periodCtx.Done():
-				// TODO deal with ended period here? but I only wanted to react to parent
-				periodCtxCancel()
+			case <-ctx.Done():
 				ackTimeout.Stop()
-				if context.Cause(periodCtx) != errPeriodEnded {
-					return
-				}
+				periodTimer.Stop()
+				return
 			case <-ackTimeout.C:
-				fmt.Println("foo")
-				// indirect ping
-				// for k := 0; k < m.subgroupSize; {
-				for range m.subgroupSize {
-					fmt.Println("faa")
-					indirect := m.peer() // TODO better name for indirect?
-					if indirect == peer {
-						continue
-					}
-					// TODO keep as is for now with kind and optional target? better name than
-					// target like suspect?
-					msg := NewMessage(pingReq, period, peer)
-					// TODO send already deals with error as best as we can no?
-					_ = m.send(indirect, msg)
-				}
-
-				for {
-					select {
-					case <-periodCtx.Done():
-						periodCtxCancel()
-						if context.Cause(periodCtx) != errPeriodEnded {
-							return
+				// direct ack timed out — send ping-req to subgroup members
+				m.muPeers.RLock()
+				hasCandidates := len(m.peers) > 1
+				m.muPeers.RUnlock()
+				if hasCandidates {
+					for range m.subgroupSize {
+						var indirect string
+						for {
+							indirect = m.peer()
+							if indirect != peer {
+								break
+							}
 						}
-
-						m.muPeers.Lock()
-						m.peers = slices.DeleteFunc(m.peers, func(p string) bool {
-							return p == peer
-						})
-						m.muPeers.Unlock()
-						m.logger.Info("peer is dead", "peer", peer, "period", period)
-						// TODO call in separate go routine as this blocks Probe loop?
-						if m.notifier != nil {
-							m.notifier.Notify(peer, Dead)
-						}
-						break waitAck
-					case a := <-m.acks:
-						// TODO what are they sending back? is the ping-req Ack given a different
-						// ack?
-						if a.Period == period && a.Addr.String() == peer {
-							m.logger.Debug("peer is alive", "peer", peer, "period", period)
-							periodCtxCancel()
-							break waitAck
-						}
+						_ = m.send(indirect, NewMessage(pingReq, period, peer))
 					}
 				}
+			case <-periodTimer.C:
+				// period ended — declare peer dead if no ack received
+				ackTimeout.Stop()
+				if !alive {
+					m.muPeers.Lock()
+					m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
+					delete(m.peerAddrs, peer)
+					m.muPeers.Unlock()
+					m.logger.Info("peer is dead", "peer", peer, "period", period)
+					if m.notifier != nil {
+						m.notifier.Notify(peer, Dead)
+					}
+				}
+				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr.String() == peer {
 					m.logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
-					periodCtxCancel()
-					break waitAck
+					alive = true
+					// Period still running; wait for it to expire before next probe.
 				}
 			}
 		}
@@ -422,16 +395,14 @@ func (m *Member) peer() string {
 	return m.peers[m.rng.IntN(len(m.peers))]
 }
 
-// TODO add that this will resolve peer in contrast to sendToAddr
-// send
+// send delivers msg to peer using the pre-resolved address from New.
 func (m *Member) send(peer string, msg Message) error {
-	// TODO better to create logger := m.logger.With with all fields or do as I currently do? what
-	// is more costly vs what is more readable?
-	addr, err := net.ResolveUDPAddr(m.conn.LocalAddr().Network(), peer)
-	if err != nil {
-		m.logger.Error("failed to resolve peer address", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target, "error", err)
-		// TODO or not return an error but a bool? as I logged so this is handled?
-		return err
+	m.muPeers.RLock()
+	addr := m.peerAddrs[peer]
+	m.muPeers.RUnlock()
+	if addr == nil {
+		m.logger.Error("no resolved address for peer", "peer", peer)
+		return fmt.Errorf("no resolved address for peer %q", peer)
 	}
 	return m.sendToAddr(peer, addr, msg)
 }
