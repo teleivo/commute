@@ -390,8 +390,8 @@ func TestDVVSetSync(t *testing.T) {
 	})
 
 	t.Run("HigherCounterDominatesWhenCoverageIsAlsoDominant", func(t *testing.T) {
-		// Receiver: (a, 2, [v2]) — counter 2, oldest-kept dot is 2.
-		// Other:    (a, 1, [v1]) — counter 1, oldest-kept dot is 1.
+		// Receiver: (a, 2, [v2]) counter 2, oldest-kept dot is 2.
+		// Other:    (a, 1, [v1]) counter 1, oldest-kept dot is 1.
 		// Receiver's N-len = 2-1 = 1 >= 1-1 = 0, so keep receiver unchanged.
 		d := &DVVSet[string]{
 			state: map[NodeID]dvvEntry[string]{

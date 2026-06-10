@@ -19,6 +19,7 @@ import (
 	"github.com/teleivo/assertive/assert"
 	"github.com/teleivo/assertive/require"
 	"github.com/teleivo/commute/internal/server"
+	"github.com/teleivo/commute/internal/swim"
 )
 
 func TestCounterConvergence(t *testing.T) {
@@ -401,6 +402,35 @@ func TestSetConvergenceRemoveDoesNotDropConcurrentAdd(t *testing.T) {
 	})
 }
 
+// TestNotifyDeadRemovesHTTPPeer verifies that when SWIM declares a peer dead, gossip to that peer
+// stops. Notify receives a SWIM UDP address; the server matches it to the HTTP peer by hostname.
+func TestNotifyDeadRemovesHTTPPeer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newCluster(t, 3)
+		c.startGossip(t.Context())
+
+		c.increment(0, "visitors", 5)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(5))
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(5))
+		assert.EqualValues(t, c.getValue(2, "visitors"), int64(5))
+
+		// Notify is called directly (not in a goroutine) so it is synchronous.
+		c.notifyDead(0, 1)
+
+		c.increment(1, "visitors", 10)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+
+		assert.EqualValues(t, c.getValue(0, "visitors"), int64(5), "node-0 should not receive node-1's update after node-1 was declared dead")
+		assert.EqualValues(t, c.getValue(1, "visitors"), int64(15), "node-1 always has its own write")
+	})
+}
+
 // TestCounterConvergenceCrashRecoveryGap documents a known bug: a node that crashes and restarts
 // loses all volatile state (store + ack map). Its peers still hold a stale ack seq for it and
 // will not send anything new since they believe it is already caught up, skipping all the history
@@ -439,11 +469,12 @@ func TestCounterConvergenceCrashRecoveryGap(t *testing.T) {
 // to route gossip requests to the right node's ServeHTTP in-process, avoiding
 // real network I/O.
 type cluster struct {
-	t       *testing.T
-	nodes   []*server.Server
-	routes  map[string]*server.Server
-	addrs   []string
-	configs []server.Config
+	t         *testing.T
+	nodes     []*server.Server
+	routes    map[string]*server.Server
+	addrs     []string
+	swimAddrs []string // SWIM UDP addresses, one per node; same host as addrs, different port
+	configs   []server.Config
 }
 
 func (c *cluster) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -474,6 +505,12 @@ func (c *cluster) restart(ctx context.Context, i int) {
 	c.nodes[i] = srv
 	c.routes[c.addrs[i]] = srv
 	go srv.StartGossip(ctx)
+}
+
+// notifyDead tells node observer that node dead has died, using dead's SWIM UDP address.
+func (c *cluster) notifyDead(observer, dead int) {
+	c.t.Helper()
+	c.nodes[observer].Notify(c.swimAddrs[dead], swim.Dead)
 }
 
 func (c *cluster) increment(node int, key string, value uint64) {
@@ -598,16 +635,19 @@ func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 	t.Helper()
 
 	addrs := make([]string, n)
+	swimAddrs := make([]string, n)
 	for i := range n {
 		addrs[i] = fmt.Sprintf("127.0.0.1:%d", 10000+i)
+		swimAddrs[i] = fmt.Sprintf("127.0.0.1:%d", 7946+i)
 	}
 
 	c := &cluster{
-		t:       t,
-		nodes:   make([]*server.Server, n),
-		routes:  make(map[string]*server.Server, n),
-		addrs:   addrs,
-		configs: make([]server.Config, n),
+		t:         t,
+		nodes:     make([]*server.Server, n),
+		routes:    make(map[string]*server.Server, n),
+		addrs:     addrs,
+		swimAddrs: swimAddrs,
+		configs:   make([]server.Config, n),
 	}
 	client := &http.Client{Transport: c}
 	for i := range n {

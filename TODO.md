@@ -1,17 +1,27 @@
 # TODO
 
-* piggyback membership events on ping/ack/ping-req messages (SWIM paper Section 3.1)
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
 * Fly.io deployment: x nodes across regions
   * how could I demo this?
+    * I think nodes being able to join would be key
   * should I work on metrics now? before adding more features
 
+* testing
+  * can I add logs back? they did cause trouble with the synctest at some point. Was that due to
+  syscalls being involved which interfere with the bubble noticing a durably blocked goroutine?
+  Right now all use discard logger which is sad as passing t.Output() is pretty cool and useful
+  * e2e style test so things like swim upd event passed to server does not remove member from server
+    as it deals with http/tcp layer
+
+* piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
+  SWIM++ adds incarnation numbers and alive refutation
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
 * dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
   gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
   also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
+
 
 ## Phase 3 — Observability
 
@@ -82,7 +92,8 @@ once you stop. Target sum = 0.
 * CRDT Map (`map[Key]CRDT`, merge delegates per-key)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 * Replace wall clock with hybrid logical clock (HLC) for LWW-Register?
-* binary encoding like automerge-perf
+* binary encoding like automerge-perf for crdt gossip?
+* testing using antithesis
 * branching
 * design a Zombie game backed by the KV store inspired by tigerbeetle ❤️
   * Debug endpoints (pause/resume gossip, inject/heal partitions, state dump, peers)

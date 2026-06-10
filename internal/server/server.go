@@ -574,16 +574,21 @@ func (srv *Server) parseNodeAddr(r *http.Request) (string, error) {
 	return peer, nil
 }
 
-// Notify implements [swim.Notifier]. It is called by the SWIM failure detector when a peer's
-// membership status changes.
-func (srv *Server) Notify(peer string, kind swim.EventKind) {
+// Notify implements [swim.Notifier].
+func (srv *Server) Notify(udpPeer string, kind swim.EventKind) {
 	if kind != swim.Dead {
 		return
 	}
+	host, _, ok := strings.Cut(udpPeer, ":")
+	if !ok {
+		srv.logger.Error("Notify called with peer missing port", "peer", udpPeer)
+		return
+	}
+	host += ":"
 
 	srv.peersMu.Lock()
-	srv.peers = slices.DeleteFunc(srv.peers, func(p string) bool {
-		return p == peer
+	srv.peers = slices.DeleteFunc(srv.peers, func(peer string) bool {
+		return strings.HasPrefix(peer, host)
 	})
 	srv.peersMu.Unlock()
 }

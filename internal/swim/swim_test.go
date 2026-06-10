@@ -151,10 +151,8 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		time.Sleep(c.protocolPeriod + c.ackTimeout*2)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
-		// TODO: node 2 should also declare node 1 dead, but membership events are not yet
-		// piggybacked on ping/ack/ping-req messages so node 2 never learns of node 1's death.
-		// assert.EqualValues(t, c.dead(2), []string{c.addr(1)})
+		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
+		assert.EqualValues(t, c.dead(2), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
 		cancel()
 	})
 }
@@ -312,10 +310,11 @@ func (r *recordingNotifier) dead() []string {
 // packets. WriteTo delivers directly to the recipient's channel, making
 // ReadFrom durably blocking within a [testing/synctest] bubble.
 type network struct {
-	mu      sync.Mutex
-	conns   []*conn
-	routes  map[string]chan packet
-	blocked map[[2]string]struct{} // blocked[{from,to}] drops packets in that direction
+	mu       sync.Mutex
+	conns    []*conn
+	routes   map[string]chan packet
+	blocked  map[[2]string]struct{} // blocked[{from,to}] drops packets in that direction
+	isolated map[string]struct{}    // isolated[addr] drops all packets sent to or from that node
 }
 
 type packet struct {
@@ -326,9 +325,10 @@ type packet struct {
 func newNetwork(t *testing.T, nodes int) *network {
 	t.Helper()
 	network := &network{
-		conns:   make([]*conn, nodes),
-		routes:  make(map[string]chan packet, nodes),
-		blocked: make(map[[2]string]struct{}),
+		conns:    make([]*conn, nodes),
+		routes:   make(map[string]chan packet, nodes),
+		blocked:  make(map[[2]string]struct{}),
+		isolated: make(map[string]struct{}),
 	}
 	for i := range nodes {
 		udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -353,9 +353,17 @@ func (n *network) addr(i int) string {
 	return n.conns[i].addr.String()
 }
 
-// drop closes and removes node i's routes, unblocking any pending ReadFrom.
+// drop fully isolates node i: it can neither send nor receive packets.
+// The receive channel is closed to unblock any pending ReadFrom.
 func (n *network) drop(i int) {
-	n.dropAddr(n.addr(i))
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	addr := n.addr(i)
+	if ch, ok := n.routes[addr]; ok {
+		close(ch)
+		delete(n.routes, addr)
+	}
+	n.isolated[addr] = struct{}{}
 }
 
 func (n *network) dropAddr(addr string) {
@@ -378,8 +386,9 @@ func (n *network) send(to string, from *net.UDPAddr, data []byte) {
 	n.mu.Lock()
 	ch, ok := n.routes[to]
 	_, isBlocked := n.blocked[[2]string{from.String(), to}]
+	_, isIsolated := n.isolated[from.String()]
 	n.mu.Unlock()
-	if !ok || isBlocked {
+	if !ok || isBlocked || isIsolated {
 		return // drop silently, like a real network
 	}
 	ch <- packet{data: data, from: from}

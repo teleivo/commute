@@ -85,7 +85,7 @@ func TestStoreRemoveSetAbsentElementDoesNotProducePhantomEntry(t *testing.T) {
 	a.Ack("b", ackOf(unmarshalDelta(t, delta)))
 
 	// Remove an element that was never in the set. ORSet.Remove returns an empty delta.
-	// This must not be stored — b has already acked everything, so Delta("b") must
+	// This must not be stored. b has already acked everything, so Delta("b") must
 	// return ok=false (nothing new to send).
 	a.RemoveSet("fruits", "mango", crdt.VV{})
 

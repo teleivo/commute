@@ -12,7 +12,9 @@ import (
 
 func TestMessageHeaderSize(t *testing.T) {
 	msg := NewMessage(ping, 0, "")
+
 	data, err := msg.MarshalBinary()
+
 	require.NoError(t, err)
 	assert.EqualValues(t, len(data), minMessageSize)
 }
@@ -57,13 +59,12 @@ func TestMessageRoundTrip(t *testing.T) {
 }
 
 func TestNewMessagePanicsOnOversizedTarget(t *testing.T) {
-	target := strings.Repeat("a", maxTargetSize+1)
 	defer func() {
 		assert.NotNil(t, recover(), "expected NewMessage to panic on oversized target")
 	}()
-	NewMessage(pingReq, 1, target)
-}
 
+	NewMessage(pingReq, 1, strings.Repeat("a", maxTargetSize+1))
+}
 
 func TestMessageUnmarshalBinaryError(t *testing.T) {
 	const headerSize = messageHeaderSize

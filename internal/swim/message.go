@@ -39,11 +39,11 @@ type Message struct {
 }
 
 const (
-	messageHeaderSize = 12                             // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen) +  1 (EventCount)
-	maxTargetSize     = 47                             // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
-	minMessageSize    = messageHeaderSize + 4          // header + 4 (Checksum)
-	maxMessageSize    = minMessageSize + maxTargetSize // upper bound for the read buffer; does not account for piggybacked events
-	eventHeaderSize   = 2                              // 1 (Kind) + 1 (NodeLen)
+	messageHeaderSize  = 12                             // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen) +  1 (EventCount)
+	maxTargetSize      = 47                             // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
+	minMessageSize     = messageHeaderSize + 4          // header + 4 (Checksum)
+	maxBaseMessageSize = minMessageSize + maxTargetSize // upper bound for the read buffer; does not account for piggybacked events
+	maxMessageSize     = maxBaseMessageSize + maxPiggybackEvents*maxEventSize
 )
 
 // NewMessage creates a Message with Version set to [messageVersion].
@@ -148,34 +148,6 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 	m.Period = binary.BigEndian.Uint64(data[2:10])
 	m.Target = target
 	m.Events = events
-
-	return nil
-}
-
-type Event struct {
-	Kind EventKind
-	Node string
-}
-
-func (e *Event) UnmarshalBinary(data []byte) error {
-	if len(data) < eventHeaderSize {
-		return fmt.Errorf("event too short: need at least %d bytes for header, got %d", eventHeaderSize, len(data))
-	}
-
-	kind := EventKind(data[0])
-	switch kind {
-	case Dead, Alive:
-	default:
-		return fmt.Errorf("unknown event kind: %d", data[0])
-	}
-
-	node, err := unmarshalString("node", int(data[1]), data[2:])
-	if err != nil {
-		return err
-	}
-
-	e.Kind = kind
-	e.Node = node
 
 	return nil
 }

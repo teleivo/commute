@@ -556,7 +556,7 @@ func TestORSetValues(t *testing.T) {
 		b := NewORSet("b")
 		b.Merge(a)
 
-		d = a.Add("apple", VV{})                    // concurrent re-add on a, empty context
+		d = a.Add("apple", VV{}) // concurrent re-add on a, empty context
 		a.Merge(&d)
 		d = b.Remove("apple", b.CausalContext("apple")) // remove on b, only observes original add
 		b.Merge(&d)
