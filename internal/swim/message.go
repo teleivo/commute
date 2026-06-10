@@ -35,13 +35,15 @@ type Message struct {
 	Kind    messageKind
 	Period  uint64 // sender's protocol period counter; echoed back in acks
 	Target  string // target peer address; only set in ping-req messages
+	Events  []Event
 }
 
 const (
-	messageHeaderSize = 11                    // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen)
-	maxTargetSize     = 47                    // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
-	minMessageSize    = messageHeaderSize + 4 // header + 4 (Checksum)
-	maxMessageSize    = minMessageSize + maxTargetSize
+	messageHeaderSize = 12                             // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen) +  1 (EventCount)
+	maxTargetSize     = 47                             // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
+	minMessageSize    = messageHeaderSize + 4          // header + 4 (Checksum)
+	maxMessageSize    = minMessageSize + maxTargetSize // upper bound for the read buffer; does not account for piggybacked events
+	eventHeaderSize   = 2                              // 1 (Kind) + 1 (NodeLen)
 )
 
 // NewMessage creates a Message with Version set to [messageVersion].
@@ -51,37 +53,50 @@ func NewMessage(kind messageKind, period uint64, target string) Message {
 	if len(target) > maxTargetSize {
 		panic(fmt.Sprintf("swim: target address %q exceeds maximum length of %d", target, maxTargetSize))
 	}
-	m := Message{
+	return Message{
 		Version: messageVersion,
 		Kind:    kind,
 		Period:  period,
 		Target:  target,
 	}
-	return m
 }
 
 // MarshalBinary encodes the message into its wire format.
 func (m *Message) MarshalBinary() (data []byte, err error) {
-	b := make([]byte, minMessageSize+len(m.Target))
+	eventBytes := len(m.Events) * eventHeaderSize
+	for _, e := range m.Events {
+		eventBytes += len(e.Node)
+	}
+
+	b := make([]byte, minMessageSize+len(m.Target)+eventBytes)
 	b[0] = messageVersion
-	b[1] = byte(m.Kind)
+	b[1] = uint8(m.Kind)
 	binary.BigEndian.PutUint64(b[2:10], m.Period)
 
 	b[10] = uint8(len(m.Target))
-	copy(b[messageHeaderSize:], m.Target)
+	copy(b[11:], m.Target)
+
+	events := b[11+len(m.Target):]
+	events[0] = uint8(len(m.Events))
+	events = events[1:]
+	for _, e := range m.Events {
+		events[0] = uint8(e.Kind)
+		events[1] = uint8(len(e.Node))
+		copy(events[eventHeaderSize:], e.Node)
+		events = events[eventHeaderSize+len(e.Node):]
+	}
 
 	h := crc32.NewIEEE()
 	h.Write(b[:len(b)-4])
-	checksum := h.Sum32()
-	binary.BigEndian.PutUint32(b[len(b)-4:], checksum)
+	binary.BigEndian.PutUint32(b[len(b)-4:], h.Sum32())
 
 	return b, nil
 }
 
 // UnmarshalBinary decodes a wire-format message into m.
 // Returns an error if data is too short, the checksum does not match, the version is unsupported,
-// the kind is unknown, TargetLen does not match the remaining bytes, or the target exceeds
-// [maxTargetSize].
+// the kind is unknown, the target or a node address exceeds [maxTargetSize], or an event's node
+// length exceeds the remaining bytes.
 func (m *Message) UnmarshalBinary(data []byte) error {
 	if len(data) < minMessageSize {
 		return fmt.Errorf("message too short: need at least %d bytes for header, got %d", minMessageSize, len(data))
@@ -104,21 +119,76 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 	}
 
 	targetLen := int(data[10])
-	if len(data[messageHeaderSize:len(data)-4]) != targetLen {
-		return fmt.Errorf("target length mismatch: header claims %d bytes, got %d", targetLen, len(data[messageHeaderSize:len(data)-4]))
+	target, err := unmarshalString("target", targetLen, data[11:])
+	if err != nil {
+		return err
 	}
-	if targetLen > maxTargetSize {
-		return fmt.Errorf("target length %d exceeds maximum of %d", targetLen, maxTargetSize)
+
+	eventCount := int(data[11+targetLen])
+	eventsInput := data[12+targetLen : len(data)-4]
+	var events []Event
+	if eventCount > 0 {
+		events = make([]Event, eventCount)
+		for i := range events {
+			n := eventHeaderSize + int(eventsInput[1])
+			if n > len(eventsInput) {
+				return fmt.Errorf("event %d node length %d exceeds remaining bytes %d", i, int(eventsInput[1]), len(eventsInput)-eventHeaderSize)
+			}
+			var e Event
+			if err := e.UnmarshalBinary(eventsInput[:n]); err != nil {
+				return err
+			}
+			events[i] = e
+			eventsInput = eventsInput[n:]
+		}
 	}
 
 	m.Version = data[0]
 	m.Kind = kind
 	m.Period = binary.BigEndian.Uint64(data[2:10])
-
-	if targetLen > 0 {
-		// TODO ok like this or something to be aware of? bigendian?
-		m.Target = string(data[messageHeaderSize : len(data)-4])
-	}
+	m.Target = target
+	m.Events = events
 
 	return nil
+}
+
+type Event struct {
+	Kind EventKind
+	Node string
+}
+
+func (e *Event) UnmarshalBinary(data []byte) error {
+	if len(data) < eventHeaderSize {
+		return fmt.Errorf("event too short: need at least %d bytes for header, got %d", eventHeaderSize, len(data))
+	}
+
+	kind := EventKind(data[0])
+	switch kind {
+	case Dead, Alive:
+	default:
+		return fmt.Errorf("unknown event kind: %d", data[0])
+	}
+
+	node, err := unmarshalString("node", int(data[1]), data[2:])
+	if err != nil {
+		return err
+	}
+
+	e.Kind = kind
+	e.Node = node
+
+	return nil
+}
+
+func unmarshalString(field string, stringLen int, input []byte) (string, error) {
+	if stringLen == 0 {
+		return "", nil
+	}
+	if stringLen > len(input) {
+		return "", fmt.Errorf("%s length mismatch: header claims %d bytes, got %d", field, stringLen, len(input))
+	}
+	if stringLen > maxTargetSize {
+		return "", fmt.Errorf("%s length %d exceeds maximum of %d", field, stringLen, maxTargetSize)
+	}
+	return string(input[:stringLen]), nil
 }

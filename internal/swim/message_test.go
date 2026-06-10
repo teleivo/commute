@@ -14,7 +14,7 @@ func TestMessageHeaderSize(t *testing.T) {
 	msg := NewMessage(ping, 0, "")
 	data, err := msg.MarshalBinary()
 	require.NoError(t, err)
-	assert.EqualValues(t, minMessageSize, len(data))
+	assert.EqualValues(t, len(data), minMessageSize)
 }
 
 func TestMessageRoundTrip(t *testing.T) {
@@ -23,6 +23,24 @@ func TestMessageRoundTrip(t *testing.T) {
 		"Ack":                NewMessage(ack, 7, ""),
 		"PingReqWithTarget":  NewMessage(pingReq, 3, "127.0.0.1:7946"),
 		"PingReqEmptyTarget": NewMessage(pingReq, 1, ""),
+		"PingWithEvents": {
+			Version: messageVersion,
+			Kind:    ping,
+			Period:  5,
+			Events: []Event{
+				{Kind: Dead, Node: "192.168.1.1:7946"},
+				{Kind: Dead, Node: "192.168.1.2:7946"},
+			},
+		},
+		"PingReqWithTargetAndEvents": {
+			Version: messageVersion,
+			Kind:    pingReq,
+			Period:  3,
+			Target:  "127.0.0.1:7946",
+			Events: []Event{
+				{Kind: Dead, Node: "192.168.1.1:7946"},
+			},
+		},
 	}
 
 	for name, msg := range tests {
@@ -33,7 +51,7 @@ func TestMessageRoundTrip(t *testing.T) {
 			var got Message
 			require.NoError(t, got.UnmarshalBinary(data))
 
-			assert.EqualValues(t, msg, got)
+			assert.EqualValues(t, got, msg)
 		})
 	}
 }
@@ -45,6 +63,7 @@ func TestNewMessagePanicsOnOversizedTarget(t *testing.T) {
 	}()
 	NewMessage(pingReq, 1, target)
 }
+
 
 func TestMessageUnmarshalBinaryError(t *testing.T) {
 	const headerSize = messageHeaderSize
@@ -63,7 +82,7 @@ func TestMessageUnmarshalBinaryError(t *testing.T) {
 			data: func() []byte {
 				msg := NewMessage(pingReq, 1, "abc")
 				b, _ := msg.MarshalBinary()
-				b[headerSize-1] = 20 // tamper TargetLen to claim 20 bytes
+				b[10] = 20 // tamper TargetLen to claim 20 bytes
 				// recompute checksum over tampered payload
 				h := crc32.NewIEEE()
 				h.Write(b[:len(b)-4])
@@ -96,9 +115,43 @@ func TestMessageUnmarshalBinaryError(t *testing.T) {
 		},
 		"UnknownVersion": {
 			data: func() []byte {
-				b := make([]byte, headerSize)
+				msg := NewMessage(ping, 1, "")
+				b, _ := msg.MarshalBinary()
 				b[0] = messageVersion + 1
-				b[1] = byte(ping)
+				h := crc32.NewIEEE()
+				h.Write(b[:len(b)-4])
+				binary.BigEndian.PutUint32(b[len(b)-4:], h.Sum32())
+				return b
+			}(),
+		},
+		"UnknownKind": {
+			data: func() []byte {
+				msg := NewMessage(ping, 1, "")
+				b, _ := msg.MarshalBinary()
+				b[1] = 0xff
+				h := crc32.NewIEEE()
+				h.Write(b[:len(b)-4])
+				binary.BigEndian.PutUint32(b[len(b)-4:], h.Sum32())
+				return b
+			}(),
+		},
+		"EventNodeLenExceedsRemainingData": {
+			// valid ping with one event, but the event's NodeLen is tampered to claim more bytes
+			data: func() []byte {
+				msg := Message{
+					Version: messageVersion,
+					Kind:    ping,
+					Period:  1,
+					Events:  []Event{{Kind: Dead, Node: "192.168.1.1:7946"}},
+				}
+				b, _ := msg.MarshalBinary()
+				// locate the event's NodeLen byte: header + eventCount byte + event Kind byte
+				eventNodeLenOffset := messageHeaderSize + 1
+				b[eventNodeLenOffset] = b[eventNodeLenOffset] + 10 // claim 10 more bytes than present
+				// recompute checksum
+				h := crc32.NewIEEE()
+				h.Write(b[:len(b)-4])
+				binary.BigEndian.PutUint32(b[len(b)-4:], h.Sum32())
 				return b
 			}(),
 		},
