@@ -190,8 +190,8 @@ func (m *Member) Listen(ctx context.Context) {
 			// relay ack carries the original probe target in Target so we can route it
 			// to the right relay waiter and deliver an Ack as if it came from the target
 			ackAddr := addr.String()
-			if msg.TargetLen > 0 {
-				ackAddr = string(msg.Target)
+			if msg.Target != "" {
+				ackAddr = msg.Target
 			}
 
 			ackCh := m.acks
@@ -213,12 +213,12 @@ func (m *Member) Listen(ctx context.Context) {
 			reply := NewMessage(ack, msg.Period, "")
 			_ = m.sendToAddr(addr.String(), addr, reply)
 		case pingReq:
-			if msg.TargetLen == 0 {
+			if msg.Target == "" {
 				m.logger.Warn("message is missing required target for indirect ping", "addr", addr)
 				continue
 			}
 
-			key := relayKey{target: string(msg.Target), period: msg.Period}
+			key := relayKey{target: msg.Target, period: msg.Period}
 			ackCh := make(chan Ack, 1)
 			mu.Lock()
 			relayAcks[key] = ackCh
@@ -227,7 +227,7 @@ func (m *Member) Listen(ctx context.Context) {
 			go func(acks <-chan Ack, done func()) {
 				defer done()
 
-				target := string(msg.Target)
+				target := msg.Target
 				if err := m.send(target, NewMessage(ping, msg.Period, "")); err != nil {
 					return
 				}

@@ -1,9 +1,8 @@
 # TODO
 
-* buffer pool for UDP reads in swim.Listen (sync.Pool of []byte)
+* piggyback membership events on ping/ack/ping-req messages (SWIM paper Section 3.1)
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
-* piggyback membership events on ping/ack/ping-req messages (SWIM paper Section 3.1)
 
 * Fly.io deployment: x nodes across regions
   * how could I demo this?

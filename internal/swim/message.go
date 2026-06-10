@@ -31,11 +31,10 @@ const messageVersion uint8 = 1
 
 // Message is a SWIM protocol message sent and received over UDP.
 type Message struct {
-	Version   uint8
-	Kind      messageKind
-	Period    uint64 // sender's protocol period counter; echoed back in acks
-	TargetLen uint8  // byte length of Target; 0 for ping and ack
-	Target    []byte // target peer address; only set in ping-req messages
+	Version uint8
+	Kind    messageKind
+	Period  uint64 // sender's protocol period counter; echoed back in acks
+	Target  string // target peer address; only set in ping-req messages
 }
 
 const (
@@ -53,13 +52,10 @@ func NewMessage(kind messageKind, period uint64, target string) Message {
 		panic(fmt.Sprintf("swim: target address %q exceeds maximum length of %d", target, maxTargetSize))
 	}
 	m := Message{
-		Version:   messageVersion,
-		Kind:      kind,
-		Period:    period,
-		TargetLen: uint8(len(target)),
-	}
-	if len(target) > 0 {
-		m.Target = []byte(target)
+		Version: messageVersion,
+		Kind:    kind,
+		Period:  period,
+		Target:  target,
 	}
 	return m
 }
@@ -71,7 +67,7 @@ func (m *Message) MarshalBinary() (data []byte, err error) {
 	b[1] = byte(m.Kind)
 	binary.BigEndian.PutUint64(b[2:10], m.Period)
 
-	b[10] = m.TargetLen
+	b[10] = uint8(len(m.Target))
 	copy(b[messageHeaderSize:], m.Target)
 
 	h := crc32.NewIEEE()
@@ -119,9 +115,9 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 	m.Kind = kind
 	m.Period = binary.BigEndian.Uint64(data[2:10])
 
-	m.TargetLen = data[10]
-	if m.TargetLen > 0 {
-		m.Target = data[messageHeaderSize : len(data)-4]
+	if targetLen > 0 {
+		// TODO ok like this or something to be aware of? bigendian?
+		m.Target = string(data[messageHeaderSize : len(data)-4])
 	}
 
 	return nil
