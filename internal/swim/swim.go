@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"net"
 	"slices"
@@ -21,33 +22,36 @@ import (
 
 // Member is a node participating in the SWIM failure detection protocol.
 type Member struct {
-	logger         *slog.Logger
-	nodeID         string
-	conn           net.PacketConn
-	peers          []string
-	peerAddrs      map[string]net.Addr // pre-resolved at New time; guarded by muPeers
-	muPeers        sync.RWMutex
-	protocolPeriod time.Duration
-	ackTimeout     time.Duration
-	period         atomic.Uint64
-	subgroupSize   int
-	rng            *rand.Rand
-	acks           chan Ack
-	notifier       Notifier
+	logger              *slog.Logger
+	nodeID              string
+	conn                net.PacketConn
+	peers               []string
+	peerAddrs           map[string]net.Addr // pre-resolved at New time; guarded by muPeers
+	muPeers             sync.RWMutex
+	protocolPeriod      time.Duration
+	ackTimeout          time.Duration
+	period              atomic.Uint64
+	subgroupSize        int
+	disseminationFactor int
+	rng                 *rand.Rand
+	acks                chan Ack
+	notifier            Notifier
+	eventQueue          EventQueue
 }
 
 // Config holds the configuration for creating a Member.
 type Config struct {
-	NodeID         string
-	Conn           net.PacketConn                      // UDP connection to receive and send packets on
-	Peers          string                              // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
-	Resolve        func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
-	ProtocolPeriod time.Duration                       // T' in the paper: duration of one failure detection round
-	AckTimeout     time.Duration                       // how long to wait for a direct ack before declaring a peer dead
-	SubgroupSize   int                                 // k in the paper: number of members used for indirect probing
-	Notifier       Notifier                            // if nil, membership changes are not reported
-	Rng            *rand.Rand                          // random source for peer selection
-	Logger         *slog.Logger                        // if nil, logging is disabled
+	NodeID              string
+	Conn                net.PacketConn                      // UDP connection to receive and send packets on
+	Peers               string                              // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
+	Resolve             func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
+	ProtocolPeriod      time.Duration                       // T' in the paper: duration of one failure detection round
+	AckTimeout          time.Duration                       // how long to wait for a direct ack before declaring a peer dead
+	SubgroupSize        int                                 // k in the paper: number of members used for indirect probing
+	DisseminationFactor int                                 // multiplier for membership event dissemination count; events are piggybacked DisseminationFactor·log(N) times (SWIM paper Section 4.1)
+	Notifier            Notifier                            // if nil, membership changes are not reported
+	Rng                 *rand.Rand                          // random source for peer selection
+	Logger              *slog.Logger                        // if nil, logging is disabled
 }
 
 // New creates a Member from the given Config.
@@ -97,6 +101,10 @@ func New(cfg Config) (*Member, error) {
 	if cfg.SubgroupSize <= 0 {
 		return nil, errors.New("subgroup size must be greater than zero")
 	}
+	disseminationFactor := cfg.DisseminationFactor
+	if disseminationFactor <= 0 {
+		disseminationFactor = 3
+	}
 
 	logger := cfg.Logger
 	if logger == nil {
@@ -111,17 +119,18 @@ func New(cfg Config) (*Member, error) {
 		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
 	member := &Member{
-		logger:         logger,
-		nodeID:         cfg.NodeID,
-		conn:           cfg.Conn,
-		peers:          slices.Sorted(maps.Keys(peers)),
-		peerAddrs:      peerAddrs,
-		protocolPeriod: cfg.ProtocolPeriod,
-		ackTimeout:     cfg.AckTimeout,
-		subgroupSize:   cfg.SubgroupSize,
-		rng:            rng,
-		acks:           make(chan Ack, 1), // shared across rounds; a stale ack can evict a live one via the non-blocking send in Listen
-		notifier:       cfg.Notifier,
+		logger:              logger,
+		nodeID:              cfg.NodeID,
+		conn:                cfg.Conn,
+		peers:               slices.Sorted(maps.Keys(peers)),
+		peerAddrs:           peerAddrs,
+		protocolPeriod:      cfg.ProtocolPeriod,
+		ackTimeout:          cfg.AckTimeout,
+		subgroupSize:        cfg.SubgroupSize,
+		disseminationFactor: disseminationFactor,
+		rng:                 rng,
+		acks:                make(chan Ack, 1), // shared across rounds; a stale ack can evict a live one via the non-blocking send in Listen
+		notifier:            cfg.Notifier,
 	}
 	return member, nil
 }
@@ -182,6 +191,13 @@ func (m *Member) Listen(ctx context.Context) {
 		if err := msg.UnmarshalBinary(b[:n]); err != nil {
 			m.logger.Error("failed to parse message", "addr", addr, "error", err)
 			continue
+		}
+
+		for _, e := range msg.Events {
+			if e.Kind == Dead {
+				m.logger.Info("peer is dead", "peer", e.Node, "source", addr)
+				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: e.Node}})
+			}
 		}
 
 		m.logger.Debug("got message", "addr", addr, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
@@ -258,27 +274,9 @@ func (m *Member) Listen(ctx context.Context) {
 	}
 }
 
-// EventKind identifies the type of membership change a [Notifier] receives.
-type EventKind uint8
-
-const (
-	Dead EventKind = iota
-	Alive
-)
-
-func (e EventKind) String() string {
-	switch e {
-	case Dead:
-		return "dead"
-	case Alive:
-		return "alive"
-	default:
-		panic(fmt.Sprintf("unknown EventKind %d", uint8(e)))
-	}
-}
-
 // Notifier is called by a Member when a peer's membership status changes. Notify is called in a
-// goroutine so implementations may block without affecting the probe loop.
+// goroutine so implementations may block without affecting the probe loop. peer is the SWIM UDP
+// address as given in [Config].Peers (e.g. "node-1:7946"), not any application-layer address.
 type Notifier interface {
 	Notify(peer string, kind EventKind)
 }
@@ -352,14 +350,8 @@ func (m *Member) Probe(ctx context.Context) {
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
-				m.muPeers.Lock()
-				m.peers = slices.DeleteFunc(m.peers, func(p string) bool { return p == peer })
-				delete(m.peerAddrs, peer)
-				m.muPeers.Unlock()
 				m.logger.Info("peer is dead", "peer", peer, "period", period)
-				if m.notifier != nil {
-					go m.notifier.Notify(peer, Dead)
-				}
+				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: peer}})
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr == peer {
@@ -375,6 +367,29 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 			}
 		}
+	}
+}
+
+func (m *Member) deletePeer(item EventItem) {
+	var newEvent bool
+	m.muPeers.Lock()
+	m.peers = slices.DeleteFunc(m.peers, func(p string) bool {
+		if p == item.Event.Node {
+			newEvent = true
+			return true
+		}
+		return false
+	})
+	delete(m.peerAddrs, item.Event.Node)
+	m.muPeers.Unlock()
+
+	if !newEvent {
+		return
+	}
+
+	m.eventQueue.Push(item)
+	if m.notifier != nil {
+		go m.notifier.Notify(item.Event.Node, Dead)
 	}
 }
 
@@ -394,7 +409,36 @@ func (m *Member) send(peer string, msg Message) error {
 	return m.sendToAddr(peer, addr, msg)
 }
 
+// sendToAddr delivers msg to peer and piggybacks pending membership events onto it.
 func (m *Member) sendToAddr(peer string, addr net.Addr, msg Message) error {
+	items := m.eventQueue.Pop(maxPiggybackEvents)
+	for _, item := range items {
+		msg.Events = append(msg.Events, item.Event)
+	}
+
+	err := m.writeMessage(peer, addr, msg)
+	if err != nil {
+		m.eventQueue.Push(items...)
+		return err
+	}
+
+	m.muPeers.RLock()
+	maxDisseminations := int(math.Ceil(float64(m.disseminationFactor) * math.Log2(float64(len(m.peers)+1))))
+	m.muPeers.RUnlock()
+	end := 0
+	for i := range len(items) {
+		items[i].SendCount++
+		if items[i].SendCount < maxDisseminations {
+			items[end] = items[i]
+			end++
+		}
+	}
+	m.eventQueue.Push(items[:end]...)
+
+	return nil
+}
+
+func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
 	b, err := msg.MarshalBinary()
 	if err != nil {
 		panic(err)

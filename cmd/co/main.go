@@ -26,14 +26,14 @@ import (
 var errFlagParse = errors.New("flag parse error")
 
 func main() {
-	code, err := run(os.Args, os.Stdin, os.Stdout, os.Stderr)
+	code, err := run(os.Args, os.Stdout, os.Stderr)
 	if err != nil && err != errFlagParse {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	}
 	os.Exit(code)
 }
 
-func run(args []string, r io.Reader, w io.Writer, wErr io.Writer) (int, error) {
+func run(args []string, w io.Writer, wErr io.Writer) (int, error) {
 	if len(args) < 2 {
 		usage(wErr)
 		return 2, nil
@@ -123,9 +123,10 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	gossipInterval := flags.Duration("gossip-interval", 5*time.Second, "how often to push state to a random peer")
 	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
 	swimPeers := flags.String("swim-peers", "", "comma-separated list of peer UDP addresses for SWIM (e.g. host1:7946,host2:7946)")
-	swimProtocolPeriod := flags.Duration("swim-protocol-period", 1*time.Second, "SWIM protocol period")
+	swimProtocolPeriod := flags.Duration("swim-protocol-period", 2*time.Second, "SWIM protocol period")
 	swimAckTimeout := flags.Duration("swim-ack-timeout", 500*time.Millisecond, "direct ack wait duration before probing indirectly")
 	swimSubgroupSize := flags.Int("swim-subgroup-size", 3, "number of nodes used for indirect probing")
+	swimDisseminationFactor := flags.Int("swim-dissemination-factor", 3, "multiplier for membership event dissemination count; events are piggybacked disseminationFactor·log(N) times")
 	debug := flags.Bool("debug", false, "enable debug logging")
 	cpuProfile := flags.String("cpu-profile", "", "write cpu profile to `file`")
 	memProfile := flags.String("mem-profile", "", "write memory profile to `file`")
@@ -170,12 +171,12 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 			return err
 		}
 		srv, err := server.New(server.Config{
-			NodeID:        *nodeID,
-			Listener:      ln,
-			AdvertiseAddr: *advertiseAddr,
-			Peers:         *peers,
+			NodeID:         *nodeID,
+			Listener:       ln,
+			AdvertiseAddr:  *advertiseAddr,
+			Peers:          *peers,
 			GossipInterval: *gossipInterval,
-			Logger:        logger,
+			Logger:         logger,
 		})
 		if err != nil {
 			return err
@@ -185,14 +186,15 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 			return err
 		}
 		member, err := swim.New(swim.Config{
-			NodeID:         *nodeID,
-			Conn:           swimConn,
-			Peers:          *swimPeers,
-			ProtocolPeriod: *swimProtocolPeriod,
-			AckTimeout:     *swimAckTimeout,
-			SubgroupSize:   *swimSubgroupSize,
-			Notifier:       srv,
-			Logger:         logger,
+			NodeID:              *nodeID,
+			Conn:                swimConn,
+			Peers:               *swimPeers,
+			ProtocolPeriod:      *swimProtocolPeriod,
+			AckTimeout:          *swimAckTimeout,
+			SubgroupSize:        *swimSubgroupSize,
+			DisseminationFactor: *swimDisseminationFactor,
+			Notifier:            srv,
+			Logger:              logger,
 		})
 		if err != nil {
 			return err
