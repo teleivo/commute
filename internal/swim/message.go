@@ -33,28 +33,34 @@ const messageVersion uint8 = 1
 type Message struct {
 	Version uint8
 	Kind    messageKind
+	Src     string // address of srce
 	Period  uint64 // sender's protocol period counter; echoed back in acks
 	Target  string // target peer address; only set in ping-req messages
 	Events  []Event
 }
 
 const (
-	messageHeaderSize  = 12                             // 1 (Version) + 1 (Kind) + 8 (Period) + 1 (TargetLen) +  1 (EventCount)
-	maxTargetSize      = 47                             // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
-	minMessageSize     = messageHeaderSize + 4          // header + 4 (Checksum)
-	maxBaseMessageSize = minMessageSize + maxTargetSize // upper bound for the read buffer; does not account for piggybacked events
+	// fixed bytes: Version(1) + SrcLen(1) + Kind(1) + Period(8) + TargetLen(1) + EventCount(1)
+	messageHeaderSize  = 13
+	maxTargetSize      = 47                                             // max IPv6 address with port: [ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535
+	minMessageSize     = messageHeaderSize + 4                          // fixed header + checksum; no Src, no Target
+	maxBaseMessageSize = minMessageSize + maxTargetSize + maxTargetSize // fixed header + max Src + max Target + checksum
 	maxMessageSize     = maxBaseMessageSize + maxPiggybackEvents*maxEventSize
 )
 
 // NewMessage creates a Message with Version set to [messageVersion].
 // Pass an empty target for ping and ack messages.
 // Panics if target exceeds [maxTargetSize] bytes.
-func NewMessage(kind messageKind, period uint64, target string) Message {
+func NewMessage(kind messageKind, src string, period uint64, target string) Message {
+	if src == "" {
+		panic("swim: src is required")
+	}
 	if len(target) > maxTargetSize {
 		panic(fmt.Sprintf("swim: target address %q exceeds maximum length of %d", target, maxTargetSize))
 	}
 	return Message{
 		Version: messageVersion,
+		Src:     src,
 		Kind:    kind,
 		Period:  period,
 		Target:  target,
@@ -68,15 +74,18 @@ func (m *Message) MarshalBinary() (data []byte, err error) {
 		eventBytes += len(e.Node)
 	}
 
-	b := make([]byte, minMessageSize+len(m.Target)+eventBytes)
+	b := make([]byte, minMessageSize+len(m.Src)+len(m.Target)+eventBytes)
 	b[0] = messageVersion
-	b[1] = uint8(m.Kind)
-	binary.BigEndian.PutUint64(b[2:10], m.Period)
+	b[1] = uint8(len(m.Src))
+	copy(b[2:], m.Src)
 
-	b[10] = uint8(len(m.Target))
-	copy(b[11:], m.Target)
+	s := 2 + len(m.Src)
+	b[s] = uint8(m.Kind)
+	binary.BigEndian.PutUint64(b[s+1:s+9], m.Period)
+	b[s+9] = uint8(len(m.Target))
+	copy(b[s+10:], m.Target)
 
-	events := b[11+len(m.Target):]
+	events := b[s+10+len(m.Target):]
 	events[0] = uint8(len(m.Events))
 	events = events[1:]
 	for _, e := range m.Events {
@@ -111,21 +120,38 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 	if data[0] != messageVersion {
 		return fmt.Errorf("unsupported message version: want %d, got %d", messageVersion, data[0])
 	}
-	kind := messageKind(data[1])
-	switch kind {
-	case ping, ack, pingReq:
-	default:
-		return fmt.Errorf("unknown message kind: %d", data[1])
-	}
 
-	targetLen := int(data[10])
-	target, err := unmarshalString("target", targetLen, data[11:])
+	srcLen := int(data[1])
+	if srcLen == 0 {
+		return fmt.Errorf("src is required")
+	}
+	src, err := unmarshalString("src", srcLen, data[2:])
 	if err != nil {
 		return err
 	}
 
-	eventCount := int(data[11+targetLen])
-	eventsInput := data[12+targetLen : len(data)-4]
+	// s points past Version + SrcLen + Src; need Kind(1)+Period(8)+TargetLen(1)+EventCount(1)=11
+	// bytes of fixed fields before the checksum
+	s := 2 + srcLen
+	if s+11 > len(data)-4 {
+		return fmt.Errorf("message too short: src too long for remaining header")
+	}
+	kind := messageKind(data[s])
+	switch kind {
+	case ping, ack, pingReq:
+	default:
+		return fmt.Errorf("unknown message kind: %d", data[s])
+	}
+	period := binary.BigEndian.Uint64(data[s+1 : s+9])
+
+	targetLen := int(data[s+9])
+	target, err := unmarshalString("target", targetLen, data[s+10:])
+	if err != nil {
+		return err
+	}
+
+	eventCount := int(data[s+10+targetLen])
+	eventsInput := data[s+11+targetLen : len(data)-4]
 	var events []Event
 	if eventCount > 0 {
 		events = make([]Event, eventCount)
@@ -144,8 +170,9 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 	}
 
 	m.Version = data[0]
+	m.Src = src
 	m.Kind = kind
-	m.Period = binary.BigEndian.Uint64(data[2:10])
+	m.Period = period
 	m.Target = target
 	m.Events = events
 

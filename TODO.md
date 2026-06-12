@@ -1,12 +1,12 @@
 # TODO
 
-* per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
-  dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
-
 * Fly.io deployment: x nodes across regions
   * how could I demo this?
     * I think nodes being able to join would be key
   * should I work on metrics now? before adding more features
+
+* per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
+  dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
 * testing
   * can I add logs back? they did cause trouble with the synctest at some point. Was that due to
@@ -15,13 +15,14 @@
   * e2e style test so things like swim upd event passed to server does not remove member from server
     as it deals with http/tcp layer
 
-* piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
-  SWIM++ adds incarnation numbers and alive refutation
+* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
+
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
 * dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
   gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
   also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
-
+  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
+    SWIM++ adds incarnation numbers and alive refutation
 
 ## Phase 3 — Observability
 

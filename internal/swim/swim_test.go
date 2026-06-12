@@ -23,6 +23,7 @@ func TestNew(t *testing.T) {
 		NodeID:         "node-0",
 		Conn:           network.conn(0),
 		Peers:          network.addr(1),
+		Resolve:        network.resolve,
 		ProtocolPeriod: 1 * time.Second,
 		AckTimeout:     500 * time.Millisecond,
 		SubgroupSize:   3,
@@ -168,7 +169,8 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		c.start(ctx)
 
 		// Wait past the ack timeout so node 0 declares node 1 dead.
-		time.Sleep(c.protocolPeriod + c.ackTimeout)
+		// The probe loop waits one period before the first probe, so we need two periods total.
+		time.Sleep(c.protocolPeriod*2 + c.ackTimeout)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
@@ -232,6 +234,7 @@ func newCluster(t *testing.T, nodes int) *cluster {
 			NodeID:         fmt.Sprintf("node-%d", i),
 			Conn:           network.conn(i),
 			Peers:          strings.Join(peers, ","),
+			Resolve:        network.resolve,
 			ProtocolPeriod: protocolPeriod,
 			AckTimeout:     ackTimeout,
 			SubgroupSize:   1,
@@ -312,9 +315,11 @@ func (r *recordingNotifier) dead() []string {
 type network struct {
 	mu       sync.Mutex
 	conns    []*conn
-	routes   map[string]chan packet
-	blocked  map[[2]string]struct{} // blocked[{from,to}] drops packets in that direction
-	isolated map[string]struct{}    // isolated[addr] drops all packets sent to or from that node
+	routes   map[string]chan packet  // keyed by raw "IP:port"
+	hostToIP map[string]*net.UDPAddr // "node-N:port" -> *net.UDPAddr
+	ipToHost map[string]string       // raw "IP:port" -> "node-N:port"
+	blocked  map[[2]string]struct{}  // blocked[{from,to}] drops packets in that direction; keys are "node-N:port"
+	isolated map[string]struct{}     // isolated["node-N:port"] drops all packets to/from that node
 }
 
 type packet struct {
@@ -327,6 +332,8 @@ func newNetwork(t *testing.T, nodes int) *network {
 	network := &network{
 		conns:    make([]*conn, nodes),
 		routes:   make(map[string]chan packet, nodes),
+		hostToIP: make(map[string]*net.UDPAddr, nodes),
+		ipToHost: make(map[string]string, nodes),
 		blocked:  make(map[[2]string]struct{}),
 		isolated: make(map[string]struct{}),
 	}
@@ -336,11 +343,14 @@ func newNetwork(t *testing.T, nodes int) *network {
 		// Listen then immediately close to grab a free port from the OS.
 		l, err := net.ListenUDP("udp", udpAddr)
 		require.NoError(t, err)
-		addr := l.LocalAddr().(*net.UDPAddr)
+		rawAddr := l.LocalAddr().(*net.UDPAddr)
 		require.NoError(t, l.Close())
+		hostAddr := fmt.Sprintf("node-%d:%d", i, rawAddr.Port)
 		ch := make(chan packet, 16)
-		network.routes[addr.String()] = ch
-		network.conns[i] = &conn{network: network, addr: addr, ch: ch}
+		network.routes[rawAddr.String()] = ch
+		network.hostToIP[hostAddr] = rawAddr
+		network.ipToHost[rawAddr.String()] = hostAddr
+		network.conns[i] = &conn{network: network, addr: rawAddr, hostAddr: hostAddr, ch: ch}
 	}
 	return network
 }
@@ -349,8 +359,20 @@ func (n *network) conn(i int) *conn {
 	return n.conns[i]
 }
 
+// addr returns the hostname:port peer address for node i, mirroring docker-compose hostnames.
 func (n *network) addr(i int) string {
-	return n.conns[i].addr.String()
+	return n.conns[i].hostAddr
+}
+
+// resolve maps a "node-N:port" peer address to its underlying *net.UDPAddr.
+func (n *network) resolve(addr string) (net.Addr, error) {
+	n.mu.Lock()
+	udpAddr, ok := n.hostToIP[addr]
+	n.mu.Unlock()
+	if !ok {
+		return nil, &net.AddrError{Err: "unknown host", Addr: addr}
+	}
+	return udpAddr, nil
 }
 
 // drop fully isolates node i: it can neither send nor receive packets.
@@ -358,20 +380,20 @@ func (n *network) addr(i int) string {
 func (n *network) drop(i int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	addr := n.addr(i)
-	if ch, ok := n.routes[addr]; ok {
+	c := n.conns[i]
+	if ch, ok := n.routes[c.addr.String()]; ok {
 		close(ch)
-		delete(n.routes, addr)
+		delete(n.routes, c.addr.String())
 	}
-	n.isolated[addr] = struct{}{}
+	n.isolated[c.hostAddr] = struct{}{}
 }
 
-func (n *network) dropAddr(addr string) {
+func (n *network) dropAddr(rawAddr string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if ch, ok := n.routes[addr]; ok {
+	if ch, ok := n.routes[rawAddr]; ok {
 		close(ch)
-		delete(n.routes, addr)
+		delete(n.routes, rawAddr)
 	}
 }
 
@@ -379,27 +401,29 @@ func (n *network) dropAddr(addr string) {
 func (n *network) block(i, j int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.blocked[[2]string{n.addr(i), n.addr(j)}] = struct{}{}
+	n.blocked[[2]string{n.conns[i].hostAddr, n.conns[j].hostAddr}] = struct{}{}
 }
 
-func (n *network) send(to string, from *net.UDPAddr, data []byte) {
+func (n *network) send(toRaw string, from *conn, data []byte) {
 	n.mu.Lock()
-	ch, ok := n.routes[to]
-	_, isBlocked := n.blocked[[2]string{from.String(), to}]
-	_, isIsolated := n.isolated[from.String()]
+	ch, ok := n.routes[toRaw]
+	toHost := n.ipToHost[toRaw]
+	_, isBlocked := n.blocked[[2]string{from.hostAddr, toHost}]
+	_, isIsolated := n.isolated[from.hostAddr]
 	n.mu.Unlock()
 	if !ok || isBlocked || isIsolated {
 		return // drop silently, like a real network
 	}
-	ch <- packet{data: data, from: from}
+	ch <- packet{data: data, from: from.addr}
 }
 
 // conn implements [net.PacketConn] using the network.
 type conn struct {
-	network *network
-	addr    *net.UDPAddr
-	ch      chan packet // own receive channel, stored directly for durable blocking under synctest
-	closed  atomic.Bool
+	network  *network
+	addr     *net.UDPAddr
+	hostAddr string
+	ch       chan packet // own receive channel, stored directly for durable blocking under synctest
+	closed   atomic.Bool
 }
 
 func (c *conn) ReadFrom(b []byte) (int, net.Addr, error) {
@@ -421,7 +445,7 @@ func (c *conn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	}
 	data := make([]byte, len(b))
 	copy(data, b)
-	c.network.send(udpAddr.String(), c.addr, data)
+	c.network.send(udpAddr.String(), c, data)
 	return len(b), nil
 }
 
