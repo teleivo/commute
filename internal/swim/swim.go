@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -171,6 +172,11 @@ type relayKey struct {
 	period uint64
 }
 
+func (m *Member) Addr() string {
+	addr := m.conn.LocalAddr().(*net.UDPAddr)
+	return m.nodeID + ":" + strconv.Itoa(addr.Port)
+}
+
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
 func (m *Member) Listen(ctx context.Context) {
@@ -200,13 +206,13 @@ func (m *Member) Listen(ctx context.Context) {
 			}
 		}
 
-		m.logger.Debug("got message", "addr", addr, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
+		m.logger.Debug("got message", "addr", addr, "src", msg.Src, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
 		switch msg.Kind {
 		case ack:
-			// relay ack carries the original probe target in Target so we can route it
-			// to the right relay waiter and deliver an Ack as if it came from the target
-			ackAddr := addr.String()
+			ackAddr := msg.Src
 			if msg.Target != "" {
+				// relay ack carries the original probe target in Target so we can route it
+				// to the right relay waiter and deliver an Ack as if it came from the target
 				ackAddr = msg.Target
 			}
 
@@ -226,7 +232,7 @@ func (m *Member) Listen(ctx context.Context) {
 			default:
 			}
 		case ping:
-			reply := NewMessage(ack, msg.Period, "")
+			reply := NewMessage(ack, m.Addr(), msg.Period, "")
 			_ = m.sendToAddr(addr.String(), addr, reply)
 		case pingReq:
 			if msg.Target == "" {
@@ -244,7 +250,7 @@ func (m *Member) Listen(ctx context.Context) {
 				defer done()
 
 				target := msg.Target
-				if err := m.send(target, NewMessage(ping, msg.Period, "")); err != nil {
+				if err := m.send(target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
 					return
 				}
 
@@ -259,7 +265,7 @@ func (m *Member) Listen(ctx context.Context) {
 							ackTimeout.Stop()
 							// carry the target in the relay ack so the requester can route it and
 							// distinguish from a ping it might have sent to the target itself
-							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, msg.Period, target))
+							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, m.Addr(), msg.Period, target))
 							break waitAck
 						}
 					}
@@ -290,6 +296,11 @@ func (m *Member) Probe(ctx context.Context) {
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	defer ackTimeout.Stop()
 
+	select {
+	case <-ctx.Done():
+	case <-periodTimer.C:
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -301,7 +312,7 @@ func (m *Member) Probe(ctx context.Context) {
 		m.muPeers.RLock()
 		if len(m.peers) == 0 {
 			m.muPeers.RUnlock()
-			m.logger.Warn("no peers to probe")
+			m.logger.Warn("no peers to send ping to")
 			select {
 			case <-ctx.Done():
 				return
@@ -313,7 +324,7 @@ func (m *Member) Probe(ctx context.Context) {
 		m.muPeers.RUnlock()
 
 		// direct ping
-		if err := m.send(peer, NewMessage(ping, period, "")); err != nil {
+		if err := m.send(peer, NewMessage(ping, m.Addr(), period, "")); err != nil {
 			select {
 			case <-ctx.Done():
 				return
@@ -330,22 +341,14 @@ func (m *Member) Probe(ctx context.Context) {
 				return
 			case <-ackTimeout.C:
 				// indirect ping-req as we did not receive an ack to direct ping on time
-				// TODO: avoid copying peers on every round; snapshot prevents infinite loop if peers shrinks to 1 concurrently.
-				m.muPeers.RLock()
-				candidates := make([]string, 0, len(m.peers))
-				for _, p := range m.peers {
-					if p != peer {
-						candidates = append(candidates, p)
-					}
-				}
-				m.muPeers.RUnlock()
-				if len(candidates) == 0 {
+				indirects, ok := m.kRandomPeers(peer)
+				if !ok {
+					m.logger.Warn("no peers to send ping-req to")
 					continue
 				}
 
-				for range m.subgroupSize {
-					indirect := candidates[m.rng.IntN(len(candidates))]
-					_ = m.send(indirect, NewMessage(pingReq, period, peer))
+				for _, indirect := range indirects {
+					_ = m.send(indirect, NewMessage(pingReq, m.Addr(), period, peer))
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
@@ -368,6 +371,38 @@ func (m *Member) Probe(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (m *Member) kRandomPeers(target string) ([]string, bool) {
+	m.muPeers.RLock()
+	candidates := make([]string, 0, len(m.peers))
+	for _, p := range m.peers {
+		if p != target {
+			candidates = append(candidates, p)
+		}
+	}
+	m.muPeers.RUnlock()
+
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	if len(candidates) <= m.subgroupSize {
+		return candidates, true
+	}
+
+	subgroup := make(map[string]struct{}, m.subgroupSize)
+	for range 3 * len(candidates) {
+		node := candidates[m.rng.IntN(len(candidates))]
+		if _, ok := subgroup[node]; ok {
+			continue
+		}
+		subgroup[node] = struct{}{}
+		if len(subgroup) == m.subgroupSize {
+			break
+		}
+	}
+	return slices.Collect(maps.Keys(subgroup)), true
 }
 
 func (m *Member) deletePeer(item EventItem) {
