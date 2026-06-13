@@ -1,0 +1,10 @@
+app = 'commute'
+primary_region = 'fra'
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

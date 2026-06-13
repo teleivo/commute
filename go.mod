@@ -1,6 +1,6 @@
 module github.com/teleivo/commute
 
-go 1.26.1
+go 1.26.4
 
 require github.com/teleivo/assertive v0.0.6
 

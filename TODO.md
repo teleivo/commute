@@ -1,12 +1,31 @@
 # TODO
 
-* Fly.io deployment: x nodes across regions
-  * how could I demo this?
-    * I think nodes being able to join would be key
-  * should I work on metrics now? before adding more features
+## Demo blockers
 
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
+
+* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
+  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
+  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped.
+  On Fly.io this is a hard deadlock: all nodes start simultaneously, each waiting for peers to
+  resolve before starting the binary (`fly-init.sh` wait loop), but peers only register DNS once
+  their binary is running — so no node ever starts. Root cause: `swim.New` resolves peer addresses
+  eagerly and returns an error if any peer is unresolvable. Fix: resolve lazily per-probe with
+  retries, so the binary starts immediately and handles unreachable peers gracefully at runtime
+  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
+    SWIM++ adds incarnation numbers and alive refutation
+
+* Prometheus counter metric: expose PN-Counter value per node so Grafana can graph divergence and
+  convergence across nodes during the demo
+
+## SWIM
+
+* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
+
+* Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
+
+## Testing
 
 * testing
   * can I add logs back? they did cause trouble with the synctest at some point. Was that due to
@@ -14,15 +33,6 @@
   Right now all use discard logger which is sad as passing t.Output() is pretty cool and useful
   * e2e style test so things like swim upd event passed to server does not remove member from server
     as it deals with http/tcp layer
-
-* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
-
-* Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
-* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
-  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
-  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
-  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
-    SWIM++ adds incarnation numbers and alive refutation
 
 ## Phase 3 — Observability
 
