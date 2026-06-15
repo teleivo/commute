@@ -106,11 +106,17 @@ curl localhost:8080/sets/fruits
 
 * No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
   if all nodes are down at once the data is lost.
-* Static initial membership: peers are configured at startup. SWIM removes dead peers from the
-  gossip pool automatically, but a node that leaves cannot rejoin without a restart of the cluster.
-  Without dynamic join, there is also a cold-start race: if a peer is probed before it is reachable
-  (e.g. DNS not yet resolved in Docker), it is declared dead immediately and silently dropped from
-  the gossip pool for the lifetime of the cluster.
+* Static initial membership: peers are discovered at startup via a bootstrap loop that contacts
+  configured seed addresses over HTTP using a push/pull exchange: the joining node sends its current
+  peer list so the seed learns new members (push), and the seed returns its own list so the joiner
+  can discover indirect peers (pull). Seeds that are unreachable are retried with exponential
+  backoff and never enter the failure detector, so a cold-starting cluster avoids the race where
+  nodes mark each other dead before DNS resolves. SWIM removes dead peers from the gossip pool
+  automatically, but a node that leaves cannot rejoin without a restart of the cluster. HTTP is a
+  pragmatic choice for the initial join: a pure UDP subprotocol would require retransmission logic
+  and message framing for large member lists, and QUIC would address that but adds an external
+  dependency. HTTP gives reliable delivery with no extra dependency since the server is already in
+  place, and fits the time constraints of this learning project.
 * No delta garbage collection: the delta buffer grows unboundedly; it will be garbage collected
   once join/leave is supported, since GC requires knowing which peers have left for good vs. are
   temporarily partitioned.

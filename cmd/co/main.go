@@ -116,17 +116,21 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		_, _ = fmt.Fprintln(wErr, "flags:")
 		flags.PrintDefaults()
 	}
+	nodeID := flags.String("node-id", "", "unique node identifier (required)")
+	// TODO make clear this is the kv-store related address for API and internal gossip
 	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
 	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port); must match exactly how this node appears in each peer's --peers list")
-	nodeID := flags.String("node-id", "", "unique node identifier (required)")
 	peers := flags.String("peers", "", "comma-separated list of peer HTTP addresses (e.g. host1:8080,host2:8080)")
 	gossipInterval := flags.Duration("gossip-interval", 5*time.Second, "how often to push state to a random peer")
+
 	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
-	swimPeers := flags.String("swim-peers", "", "comma-separated list of peer UDP addresses for SWIM (e.g. host1:7946,host2:7946)")
+	swimJoinAddr := flags.String("swim-join-addr", ":0", "TCP listen address for the SWIM HTTP join endpoint (e.g. :7947)")
+	swimSeeds := flags.String("swim-seeds", "", "comma-separated list of seed HTTP addresses for bootstrap (e.g. host1:7947,host2:7947)")
 	swimProtocolPeriod := flags.Duration("swim-protocol-period", 2*time.Second, "SWIM protocol period")
 	swimAckTimeout := flags.Duration("swim-ack-timeout", 500*time.Millisecond, "direct ack wait duration before probing indirectly")
 	swimSubgroupSize := flags.Int("swim-subgroup-size", 3, "number of nodes used for indirect probing")
 	swimDisseminationFactor := flags.Int("swim-dissemination-factor", 3, "multiplier for membership event dissemination count; events are piggybacked disseminationFactor·log(N) times")
+
 	debug := flags.Bool("debug", false, "enable debug logging")
 	cpuProfile := flags.String("cpu-profile", "", "write cpu profile to `file`")
 	memProfile := flags.String("mem-profile", "", "write memory profile to `file`")
@@ -140,6 +144,9 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		return 2, errFlagParse
 	}
 
+	if *nodeID == "" {
+		return 2, errors.New("node-id is required")
+	}
 	if _, _, err := net.SplitHostPort(*addr); err != nil {
 		return 2, fmt.Errorf("invalid addr %q: %s", *addr, err)
 	}
@@ -152,8 +159,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
 		return 2, fmt.Errorf("invalid swim-addr %q: %s", *swimAddr, err)
 	}
-	if *swimPeers == "" {
-		return 2, errors.New("swim-peers is required")
+	if _, _, err := net.SplitHostPort(*swimJoinAddr); err != nil {
+		return 2, fmt.Errorf("invalid swim-join-addr %q: %s", *swimJoinAddr, err)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -185,10 +192,15 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		if err != nil {
 			return err
 		}
+		lnSwim, err := net.Listen("tcp", *swimJoinAddr)
+		if err != nil {
+			return err
+		}
 		member, err := swim.New(swim.Config{
 			NodeID:              *nodeID,
 			Conn:                swimConn,
-			Peers:               *swimPeers,
+			Listener:            lnSwim,
+			Seeds:               *swimSeeds,
 			ProtocolPeriod:      *swimProtocolPeriod,
 			AckTimeout:          *swimAckTimeout,
 			SubgroupSize:        *swimSubgroupSize,
