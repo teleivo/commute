@@ -19,26 +19,15 @@ set -eu
 
 HTTP_PORT="${HTTP_PORT:-8080}"
 SWIM_PORT="${SWIM_PORT:-7946}"
+SWIM_JOIN_PORT="${SWIM_JOIN_PORT:-7947}"
 
 # Build peer lists from bare names to fully-qualified internal DNS addresses.
 http_peers=""
-swim_peers=""
-peer_hosts=""
+swim_seeds=""
 for name in $(echo "$PEERS" | tr ',' ' '); do
     host="${name}.vm.${FLY_APP_NAME}.internal"
     http_peers="${http_peers:+${http_peers},}${host}:${HTTP_PORT}"
-    swim_peers="${swim_peers:+${swim_peers},}${host}:${SWIM_PORT}"
-    peer_hosts="${peer_hosts} ${host}"
-done
-
-# Wait until all peer hostnames resolve. On a cold start peers register their
-# DNS entries only after they are up, so we retry until all are reachable.
-for host in ${peer_hosts}; do
-    echo "waiting for ${host} to resolve..."
-    until nslookup "${host}" >/dev/null 2>&1; do
-        sleep 2
-    done
-    echo "${host} resolved"
+    swim_seeds="${swim_seeds:+${swim_seeds},}${host}:${SWIM_JOIN_PORT}"
 done
 
 advertise_addr="${NODE_NAME}.vm.${FLY_APP_NAME}.internal:${HTTP_PORT}"
@@ -49,5 +38,6 @@ exec /bin/co server \
     --advertise-addr="${advertise_addr}" \
     --peers="${http_peers}" \
     --swim-addr=":${SWIM_PORT}" \
-    --swim-peers="${swim_peers}" \
+    --swim-join-addr=":${SWIM_JOIN_PORT}" \
+    --swim-seeds="${swim_seeds}" \
     ${DEBUG:+--debug}

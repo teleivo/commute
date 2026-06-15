@@ -5,14 +5,18 @@
 package swim
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"math"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,36 +27,52 @@ import (
 
 // Member is a node participating in the SWIM failure detection protocol.
 type Member struct {
-	logger              *slog.Logger
-	nodeID              string
-	conn                net.PacketConn
-	peers               []string
-	peerAddrs           map[string]net.Addr // pre-resolved at New time; guarded by muPeers
-	muPeers             sync.RWMutex
+	nodeID   string
+	conn     net.PacketConn
+	listener net.Listener
+	server   *http.Server
+
+	seeds      []string
+	httpClient *http.Client
+	resolve    func(addr string) (net.Addr, error)
+
+	// muPeers guards peers and deadPeers
+	peers     []string
+	deadPeers map[string]struct{}
+	muPeers   sync.RWMutex
+
 	protocolPeriod      time.Duration
 	ackTimeout          time.Duration
-	period              atomic.Uint64
 	subgroupSize        int
 	disseminationFactor int
-	rng                 *rand.Rand
-	acks                chan Ack
-	notifier            Notifier
-	eventQueue          EventQueue
+	period              atomic.Uint64
+
+	rng        *rand.Rand
+	muRng      sync.Mutex
+	acks       chan Ack
+	eventQueue EventQueue
+	notifier   Notifier
+	logger     *slog.Logger
 }
 
 // Config holds the configuration for creating a Member.
 type Config struct {
-	NodeID              string
-	Conn                net.PacketConn                      // UDP connection to receive and send packets on
-	Peers               string                              // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
-	Resolve             func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
-	ProtocolPeriod      time.Duration                       // T' in the paper: duration of one failure detection round
-	AckTimeout          time.Duration                       // how long to wait for a direct ack before declaring a peer dead
-	SubgroupSize        int                                 // k in the paper: number of members used for indirect probing
-	DisseminationFactor int                                 // multiplier for membership event dissemination count; events are piggybacked DisseminationFactor·log(N) times (SWIM paper Section 4.1)
-	Notifier            Notifier                            // if nil, membership changes are not reported
-	Rng                 *rand.Rand                          // random source for peer selection
-	Logger              *slog.Logger                        // if nil, logging is disabled
+	NodeID   string
+	Conn     net.PacketConn // UDP connection to receive and send packets on
+	Listener net.Listener   // TCP listener for the HTTP join endpoint
+
+	Seeds      string                              // comma-separated list of seed HTTP addresses for the bootstrap loop (e.g. host1:7947,host2:7947)
+	HTTPClient *http.Client                        // HTTP client for bootstrap join calls; if nil, defaults to http.DefaultClient
+	Resolve    func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
+
+	ProtocolPeriod      time.Duration // T' in the paper: duration of one failure detection round
+	AckTimeout          time.Duration // how long to wait for a direct ack before declaring a peer dead
+	SubgroupSize        int           // k in the paper: number of members used for indirect probing
+	DisseminationFactor int           // multiplier for membership event dissemination count; events are piggybacked DisseminationFactor·log(N) times (SWIM paper Section 4.1)
+
+	Rng      *rand.Rand   // random source for peer selection
+	Notifier Notifier     // if nil, membership changes are not reported
+	Logger   *slog.Logger // if nil, logging is disabled
 }
 
 // New creates a Member from the given Config.
@@ -63,32 +83,26 @@ func New(cfg Config) (*Member, error) {
 	if cfg.Conn == nil {
 		return nil, errors.New("conn is required")
 	}
-	if cfg.Peers == "" {
-		return nil, errors.New("at least one peer is required")
-	}
 	resolve := cfg.Resolve
 	if resolve == nil {
 		resolve = func(addr string) (net.Addr, error) {
 			return net.ResolveUDPAddr("udp", addr)
 		}
 	}
-	peers := make(map[string]struct{})
-	peerAddrs := make(map[string]net.Addr)
-	for p := range strings.SplitSeq(cfg.Peers, ",") {
-		p = strings.TrimSpace(p)
-		host, port, err := net.SplitHostPort(p)
+	seeds := make(map[string]struct{})
+	for s := range strings.SplitSeq(cfg.Seeds, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		host, port, err := net.SplitHostPort(s)
 		if err != nil {
-			return nil, fmt.Errorf("invalid peer %q: %s", p, err)
+			return nil, fmt.Errorf("invalid seed %q: %s", s, err)
 		}
 		if host == "" || port == "" {
-			return nil, fmt.Errorf("invalid peer %q: host and port are required", p)
+			return nil, fmt.Errorf("invalid seed %q: host and port are required", s)
 		}
-		addr, err := resolve(p)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve peer %q: %w", p, err)
-		}
-		peers[p] = struct{}{}
-		peerAddrs[p] = addr
+		seeds[s] = struct{}{}
 	}
 	if cfg.ProtocolPeriod <= 0 {
 		return nil, errors.New("protocol period must be greater than zero")
@@ -119,28 +133,57 @@ func New(cfg Config) (*Member, error) {
 	if rng == nil {
 		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
-	member := &Member{
-		logger:              logger,
+	handler := http.NewServeMux()
+	server := http.Server{
+		Handler:     handler,
+		ReadTimeout: 3 * time.Second,
+		IdleTimeout: 120 * time.Second,
+	}
+	client := cfg.HTTPClient
+	if client == nil {
+		client = &http.Client{}
+	}
+	m := &Member{
 		nodeID:              cfg.NodeID,
 		conn:                cfg.Conn,
-		peers:               slices.Sorted(maps.Keys(peers)),
-		peerAddrs:           peerAddrs,
+		listener:            cfg.Listener,
+		server:              &server,
+		seeds:               slices.Collect(maps.Keys(seeds)),
+		httpClient:          client,
+		resolve:             resolve,
+		peers:               make([]string, 0),
+		deadPeers:           make(map[string]struct{}),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
 		subgroupSize:        cfg.SubgroupSize,
 		disseminationFactor: disseminationFactor,
 		rng:                 rng,
 		acks:                make(chan Ack, 1), // shared across rounds; a stale ack can evict a live one via the non-blocking send in Listen
+		eventQueue:          EventQueue{},
 		notifier:            cfg.Notifier,
+		logger:              logger,
 	}
-	return member, nil
+	handler.HandleFunc("POST /internal/swim/join", m.JoinHandler)
+	return m, nil
 }
 
 // Start runs the Listen and Probe loops until ctx is cancelled.
 func (m *Member) Start(ctx context.Context) error {
-	m.logger.Info("listening", "addr", m.conn.LocalAddr())
+	m.logger.Info("listening", "addr", m.conn.LocalAddr(), "tcpAddr", m.listener.Addr())
+
+	go func() {
+		<-ctx.Done()
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		if err := m.server.Shutdown(ctxTimeout); err != nil && !errors.Is(err, context.Canceled) {
+			m.logger.Error("failed to shutdown", "error", err)
+		}
+	}()
 
 	var wg sync.WaitGroup
+	wg.Go(func() {
+		m.Bootstrap(ctx)
+	})
 	wg.Go(func() {
 		m.Listen(ctx)
 	})
@@ -153,6 +196,10 @@ func (m *Member) Start(ctx context.Context) error {
 			m.logger.Error("failed to close connection", "error", err)
 		}
 	})
+
+	if err := m.server.Serve(m.listener); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	wg.Wait()
 	return nil
 }
@@ -296,11 +343,6 @@ func (m *Member) Probe(ctx context.Context) {
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	defer ackTimeout.Stop()
 
-	select {
-	case <-ctx.Done():
-	case <-periodTimer.C:
-	}
-
 	for {
 		if ctx.Err() != nil {
 			return
@@ -392,6 +434,7 @@ func (m *Member) kRandomPeers(target string) ([]string, bool) {
 	}
 
 	subgroup := make(map[string]struct{}, m.subgroupSize)
+	m.muRng.Lock()
 	for range 3 * len(candidates) {
 		node := candidates[m.rng.IntN(len(candidates))]
 		if _, ok := subgroup[node]; ok {
@@ -402,6 +445,7 @@ func (m *Member) kRandomPeers(target string) ([]string, bool) {
 			break
 		}
 	}
+	m.muRng.Unlock()
 	return slices.Collect(maps.Keys(subgroup)), true
 }
 
@@ -415,7 +459,7 @@ func (m *Member) deletePeer(item EventItem) {
 		}
 		return false
 	})
-	delete(m.peerAddrs, item.Event.Node)
+	m.deadPeers[item.Event.Node] = struct{}{}
 	m.muPeers.Unlock()
 
 	// Peer was already removed (e.g. dead event piggybacked while Probe was also declaring it
@@ -431,17 +475,18 @@ func (m *Member) deletePeer(item EventItem) {
 }
 
 func (m *Member) randomPeer() string {
-	return m.peers[m.rng.IntN(len(m.peers))]
+	m.muRng.Lock()
+	i := m.rng.IntN(len(m.peers))
+	m.muRng.Unlock()
+	return m.peers[i]
 }
 
-// send delivers msg to peer using the pre-resolved address from New.
+// send delivers msg to peer by resolving its address and writing the message.
 func (m *Member) send(peer string, msg Message) error {
-	m.muPeers.RLock()
-	addr := m.peerAddrs[peer]
-	m.muPeers.RUnlock()
-	if addr == nil {
-		m.logger.Error("no resolved address for peer", "peer", peer)
-		return fmt.Errorf("no resolved address for peer %q", peer)
+	addr, err := m.resolve(peer)
+	if err != nil {
+		m.logger.Error("failed to resolve address for peer", "peer", peer)
+		return fmt.Errorf("failed to resolve address for peer %q", peer)
 	}
 	return m.sendToAddr(peer, addr, msg)
 }
@@ -487,4 +532,149 @@ func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
 	}
 	m.logger.Debug("sent message", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
 	return nil
+}
+
+// Bootstrap runs the seed join loop until ctx is cancelled. It contacts each configured seed over
+// HTTP using a push/pull exchange: the node sends its current peer list in the request body so the
+// seed can learn new members (push), and the seed returns its own member list in the response so
+// the caller can discover indirect peers (pull). Seeds that are unreachable are retried with
+// exponential backoff (initial 5 s, doubling up to 5 min, with jitter); seeds that never respond
+// are never added as peers and never enter the failure detector.
+//
+// HTTP is used instead of UDP for the initial join as a pragmatic choice. A pure UDP join
+// subprotocol would require retransmission logic and message framing for large member lists.
+// QUIC would address that but adds an external dependency. HTTP gives reliable delivery with no
+// extra dependency since the server is already in place, and fits the time constraints of this
+// learning project.
+func (m *Member) Bootstrap(ctx context.Context) {
+	jitter := func(interval time.Duration) time.Duration {
+		m.muRng.Lock()
+		j := m.rng.Int64N(int64(min(interval/6, 5*time.Second)))
+		m.muRng.Unlock()
+		return time.Duration(j)
+	}
+	interval := 5 * time.Second
+	joinTimeout := 500 * time.Millisecond
+	wait := time.NewTimer(0)
+	defer wait.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-wait.C:
+		}
+
+		m.muPeers.Lock()
+		peers := slices.Clone(m.peers)
+		m.muPeers.Unlock()
+		peers = append(peers, m.Addr())
+		body, err := json.Marshal(joinBody{
+			Peers: peers,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		var discovered []string
+		for _, seed := range m.seeds {
+			reqCtx, cancel := context.WithTimeout(ctx, joinTimeout)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+seed+"/internal/swim/join", bytes.NewReader(body))
+			if err != nil {
+				cancel()
+				panic(err)
+			}
+			req.Header.Add("Content-Type", "application/json")
+			resp, err := m.httpClient.Do(req)
+			cancel()
+			if err != nil {
+				m.logger.Warn("failed to join seed", "seed", seed, "error", err)
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				_ = resp.Body.Close()
+				m.logger.Warn("join rejected by seed", "seed", seed, "status", resp.StatusCode)
+				continue
+			}
+
+			var joined joinBody
+			err = json.NewDecoder(resp.Body).Decode(&joined)
+			_ = resp.Body.Close()
+			if err != nil {
+				m.logger.Warn("failed to decode join response", "seed", seed, "error", err)
+				continue
+			}
+			m.logger.Debug("joined seed", "seed", seed)
+			discovered = append(discovered, joined.Peers...)
+		}
+
+		self := m.Addr()
+		m.muPeers.Lock()
+		for _, p := range discovered {
+			if p == self {
+				continue
+			}
+			if _, ok := m.deadPeers[p]; ok {
+				continue
+			}
+			if !slices.Contains(m.peers, p) {
+				m.peers = append(m.peers, p)
+			}
+		}
+		m.muPeers.Unlock()
+
+		wait.Reset(interval + jitter(interval))
+		if interval < 5*time.Minute {
+			interval = min(interval*2, 5*time.Minute)
+		}
+	}
+}
+
+type joinBody struct {
+	Peers []string `json:"peers"`
+}
+
+// JoinHandler returns an HTTP handler that accepts POST /internal/swim/join requests. The request
+// body must contain the caller's SWIM UDP address (host:port). The handler registers the caller as
+// a peer and responds with the node's current SWIM member list as a JSON array of addresses.
+func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Body == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	var req joinBody
+	err = json.Unmarshal(b, &req)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	m.muPeers.Lock()
+	for _, p := range req.Peers {
+		if p == m.Addr() {
+			continue
+		}
+		if _, ok := m.deadPeers[p]; ok {
+			continue
+		}
+		if !slices.Contains(m.peers, p) {
+			m.peers = append(m.peers, p)
+		}
+	}
+	result := slices.Clone(m.peers)
+	result = append(result, m.Addr())
+	m.muPeers.Unlock()
+
+	e := json.NewEncoder(w)
+	err = e.Encode(joinBody{
+		Peers: result,
+	})
+	if err != nil {
+		m.logger.Error("failed to encode peers", "error", err)
+	}
 }

@@ -181,7 +181,6 @@ func TestKRandomPeers(t *testing.T) {
 			m := &Member{
 				nodeID:       tc.nodeID,
 				peers:        tc.peers,
-				peerAddrs:    make(map[string]net.Addr),
 				subgroupSize: tc.subgroupSize,
 				rng:          rand.New(rand.NewPCG(42, 0)),
 			}

@@ -59,7 +59,8 @@ and maps Fly environment variables to `co server` flags:
 * `NODE_NAME` is set by `fly.sh` and becomes `--node-id` and `--advertise-addr`. Fly does not
   inject the machine name, so it must be passed explicitly.
 * `PEERS` is set by `fly.sh` as a comma-separated list of peer names and gets expanded to
-  `<name>.vm.commute.internal:<port>` for both HTTP (`--peers`) and SWIM (`--swim-peers`)
+  `<name>.vm.commute.internal:<port>` for both HTTP (`--peers`, port 8080) and SWIM bootstrap
+  (`--swim-seeds`, port 7947)
 * `DEBUG=1` enables debug logging
 
 Nodes communicate over **6PN** (Fly's IPv6 WireGuard mesh). Each machine is reachable at

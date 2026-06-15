@@ -1,20 +1,7 @@
 # TODO
 
-## Demo blockers
-
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
-
-* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
-  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
-  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped.
-  On Fly.io this is a hard deadlock: all nodes start simultaneously, each waiting for peers to
-  resolve before starting the binary (`fly-init.sh` wait loop), but peers only register DNS once
-  their binary is running — so no node ever starts. Root cause: `swim.New` resolves peer addresses
-  eagerly and returns an error if any peer is unresolvable. Fix: resolve lazily per-probe with
-  retries, so the binary starts immediately and handles unreachable peers gracefully at runtime
-  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
-    SWIM++ adds incarnation numbers and alive refutation
 
 * Prometheus counter metric: expose PN-Counter value per node so Grafana can graph divergence and
   convergence across nodes during the demo
@@ -23,16 +10,44 @@
 
 * 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
+* Alive events: two halves of the same feature, both needed together. Not needed for the demo
+  since the bootstrap loop already handles peer discovery with a 1s retry interval.
+  * Emit: `JoinHandler` should push an Alive event onto the queue so it gets piggybacked on
+    outgoing UDP messages and propagates the new peer to the rest of the cluster. Without this,
+    other nodes only learn about a joiner via their own bootstrap loops contacting the same seed.
+  * Receive: `Listen` currently silently drops all non-Dead piggybacked events (`swim.go:239`).
+    It must handle Alive events by adding the peer if not already known and not dead.
+  Once both land, `JoinHandler` can also `delete(deadPeers, req.Peer)` before adding so a
+  restarted node at the same address can re-join and the rejoin propagates to the cluster. Until
+  then, dead peers are blocked at the join handler to avoid re-admission loops where the dead node
+  keeps posting, getting re-added, and being declared dead again. Revisit incarnation numbers
+  alongside this to prevent a stale alive from overriding a newer dead (SWIM++ §5).
+* Crash recovery / rejoin identity: a restarting node that was previously marked dead needs a
+  new identity so peers accept it. Corrosion does this by changing the foca identity on restart.
+  Revisit alongside sequence regression detection.
+
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
 
 ## Testing
 
-* testing
-  * can I add logs back? they did cause trouble with the synctest at some point. Was that due to
-  syscalls being involved which interfere with the bubble noticing a durably blocked goroutine?
-  Right now all use discard logger which is sad as passing t.Output() is pretty cool and useful
-  * e2e style test so things like swim upd event passed to server does not remove member from server
-    as it deals with http/tcp layer
+* unexport most methods in Server so the API is as clean as Member. I think I just have StartGossip
+  and so on exported because it was easier to test at first.
+* can I add logs back? they did cause trouble with the synctest at some point. Was that due to
+syscalls being involved which interfere with the bubble noticing a durably blocked goroutine?
+Right now all use discard logger which is sad as passing t.Output() is pretty cool and useful
+* extract common test setup like the fake network?
+* e2e style test so things like swim upd event passed to server does not remove member from server
+  as it deals with http/tcp layer
+* e2e test gap for bootstrap / cold-start: unit tests use a fake in-process network with
+  synchronous resolution so they cannot reproduce the Fly.io race where DNS propagates
+  asynchronously while multiple binaries start concurrently. The cold-start bug was only caught
+  during deploy, not during development, because no test exercises real DNS + real UDP sockets +
+  simultaneous process startup. An e2e test that spins up multiple `co server` processes (or
+  docker-compose) and asserts they converge without any startup ordering would catch this class
+  of bug. The bootstrap loop unit tests can cover retry logic and member propagation in
+  isolation, but cannot substitute for this.
+* can I use maelstrom?
+* how can I use antithesis?
 
 ## Phase 3 — Observability
 
@@ -42,8 +57,6 @@
   delta-interval. In the common case each key appears in only one delta entry, so the clone is
   never needed. Measure whether skipping the clone when no collision occurs (defer until a second
   delta for the same key arrives) is worth the added complexity.
-* Can maelstrom test my kv? or would I need to conform to its API? and if so how much work is it to
-  build my own maelstrom or can it be configured?
 
 ### Metrics reference
 
@@ -104,7 +117,6 @@ once you stop. Target sum = 0.
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 * Replace wall clock with hybrid logical clock (HLC) for LWW-Register?
 * binary encoding like automerge-perf for crdt gossip?
-* testing using antithesis
 * branching
 * design a Zombie game backed by the KV store inspired by tigerbeetle ❤️
   * Debug endpoints (pause/resume gossip, inject/heal partitions, state dump, peers)

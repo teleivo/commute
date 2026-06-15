@@ -9,7 +9,8 @@ services:
       - -advertise-addr=node-0:8080
       - -peers=node-1:8080,node-2:8080
       - -swim-addr=:7946
-      - -swim-peers=node-1:7946,node-2:7946
+      - -swim-join-addr=:7947
+      - -swim-seeds=node-1:7947,node-2:7947
     ports:
       - "8080:8080"
     develop:
@@ -27,7 +28,8 @@ services:
       - -advertise-addr=node-1:8080
       - -peers=node-0:8080,node-2:8080
       - -swim-addr=:7946
-      - -swim-peers=node-0:7946,node-2:7946
+      - -swim-join-addr=:7947
+      - -swim-seeds=node-0:7947,node-2:7947
     ports:
       - "8081:8080"
     develop:
@@ -45,7 +47,8 @@ services:
       - -advertise-addr=node-2:8080
       - -peers=node-0:8080,node-1:8080
       - -swim-addr=:7946
-      - -swim-peers=node-0:7946,node-1:7946
+      - -swim-join-addr=:7947
+      - -swim-seeds=node-0:7947,node-1:7947
     ports:
       - "8082:8080"
     develop:

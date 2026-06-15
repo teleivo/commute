@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,11 +19,11 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	network := newNetwork(t, 2)
+	network := newNetwork(t, 1)
 	validConfig := swim.Config{
 		NodeID:         "node-0",
 		Conn:           network.conn(0),
-		Peers:          network.addr(1),
+		Listener:       newFakeListener(),
 		Resolve:        network.resolve,
 		ProtocolPeriod: 1 * time.Second,
 		AckTimeout:     500 * time.Millisecond,
@@ -44,20 +45,16 @@ func TestNew(t *testing.T) {
 			cfg:     func() swim.Config { c := validConfig; c.Conn = nil; return c }(),
 			wantErr: true,
 		},
-		"MissingPeers": {
-			cfg:     func() swim.Config { c := validConfig; c.Peers = ""; return c }(),
+		"InvalidSeed": {
+			cfg:     func() swim.Config { c := validConfig; c.Seeds = "notahost"; return c }(),
 			wantErr: true,
 		},
-		"InvalidPeer": {
-			cfg:     func() swim.Config { c := validConfig; c.Peers = "notahost"; return c }(),
+		"SeedMissingHost": {
+			cfg:     func() swim.Config { c := validConfig; c.Seeds = ":7947"; return c }(),
 			wantErr: true,
 		},
-		"PeerMissingHost": {
-			cfg:     func() swim.Config { c := validConfig; c.Peers = ":7947"; return c }(),
-			wantErr: true,
-		},
-		"PeerMissingPort": {
-			cfg:     func() swim.Config { c := validConfig; c.Peers = "127.0.0.1"; return c }(),
+		"SeedMissingPort": {
+			cfg:     func() swim.Config { c := validConfig; c.Seeds = "127.0.0.1"; return c }(),
 			wantErr: true,
 		},
 		"ZeroProtocolPeriod": {
@@ -125,9 +122,10 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait past the direct ack timeout and the indirect ack timeout so ping-req
-		// has had time to complete, but node 1 should survive via node 2.
-		time.Sleep(c.protocolPeriod + c.ackTimeout*2)
+		// Wait one period for bootstrap to populate peers, then past the direct ack
+		// timeout and the indirect ack timeout so ping-req has had time to complete,
+		// but node 1 should survive via node 2.
+		time.Sleep(c.protocolPeriod*2 + c.ackTimeout*2)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string(nil))
@@ -148,8 +146,11 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait past both the direct and indirect ack timeouts.
-		time.Sleep(c.protocolPeriod + c.ackTimeout*2)
+		// Wait for bootstrap to populate peers, then past both the direct and
+		// indirect ack timeouts. Bootstrap and Probe start concurrently so Probe
+		// may burn one period before peers are available; each node may also probe
+		// the live peer before the dead one, burning another period.
+		time.Sleep(c.protocolPeriod*4 + c.ackTimeout*2)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
@@ -168,9 +169,9 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait past the ack timeout so node 0 declares node 1 dead.
-		// The probe loop waits one period before the first probe, so we need two periods total.
-		time.Sleep(c.protocolPeriod*2 + c.ackTimeout)
+		// Wait one period for bootstrap to populate peers, then past the ack timeout.
+		// The probe loop waits one period before the first probe, so we need three periods total.
+		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
@@ -188,9 +189,10 @@ func TestProbeNoPeers(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait for node 0 to declare node 1 dead, then run several more periods to
-		// exercise the probe loop with an empty peer list.
-		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
+		// Wait one period for bootstrap to populate peers, then for node 0 to declare
+		// node 1 dead, then several more periods to exercise the probe loop with an
+		// empty peer list.
+		time.Sleep(c.protocolPeriod*4 + c.ackTimeout)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
@@ -222,28 +224,34 @@ func newCluster(t *testing.T, nodes int) *cluster {
 		notifiers[i] = &recordingNotifier{}
 	}
 	network := newNetwork(t, nodes)
+	rt := newJoinRoundTripper()
 	members := make([]*swim.Member, nodes)
 	for i := range nodes {
-		peers := make([]string, 0, nodes-1)
+		seeds := make([]string, 0, nodes-1)
 		for j := range nodes {
 			if i != j {
-				peers = append(peers, network.addr(j))
+				seeds = append(seeds, fmt.Sprintf("node-%d:7947", j))
 			}
 		}
 		cfg := swim.Config{
 			NodeID:         fmt.Sprintf("node-%d", i),
 			Conn:           network.conn(i),
-			Peers:          strings.Join(peers, ","),
+			Listener:       newFakeListener(),
+			Seeds:          strings.Join(seeds, ","),
 			Resolve:        network.resolve,
 			ProtocolPeriod: protocolPeriod,
 			AckTimeout:     ackTimeout,
 			SubgroupSize:   1,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
 			Notifier:       notifiers[i],
+			HTTPClient:     &http.Client{Transport: rt},
 		}
 		m, err := swim.New(cfg)
 		require.NoError(t, err)
 		members[i] = m
+	}
+	for i, m := range members {
+		rt.register(fmt.Sprintf("node-%d:7947", i), m)
 	}
 
 	return &cluster{
