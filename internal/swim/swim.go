@@ -372,6 +372,7 @@ func (m *Member) Probe(ctx context.Context) {
 	defer periodTimer.Stop()
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	defer ackTimeout.Stop()
+	noPeers := true
 
 	for {
 		if ctx.Err() != nil {
@@ -394,6 +395,10 @@ func (m *Member) Probe(ctx context.Context) {
 		}
 		peer := m.randomPeer()
 		m.muPeers.RUnlock()
+		if noPeers {
+			noPeers = false
+			logger.Info("peers discovered, starting probe")
+		}
 
 		// direct ping
 		if err := m.send(ctx, peer, NewMessage(ping, m.Addr(), period, "")); err != nil {
@@ -643,6 +648,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		logger.Info("joined seeds", "seeds", seeds)
 
 		self := m.Addr()
+		var added int
 		m.muPeers.Lock()
 		for _, p := range discovered {
 			if p == self {
@@ -653,9 +659,13 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			}
 			if !slices.Contains(m.peers, p) {
 				m.peers = append(m.peers, p)
+				added++
 			}
 		}
 		m.muPeers.Unlock()
+		if added > 0 {
+			logger.Info("added peers", "peers_added", added)
+		}
 
 		waitDuration = interval + jitter(interval)
 		wait.Reset(waitDuration)
