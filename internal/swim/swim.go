@@ -556,7 +556,6 @@ func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
 // extra dependency since the server is already in place, and fits the time constraints of this
 // learning project.
 func (m *Member) Bootstrap(ctx context.Context) {
-	logger := m.logger.With("loop", "bootstrap")
 	jitter := func(interval time.Duration) time.Duration {
 		m.muRng.Lock()
 		j := m.rng.Int64N(int64(min(interval/6, 5*time.Second)))
@@ -565,7 +564,8 @@ func (m *Member) Bootstrap(ctx context.Context) {
 	}
 	interval := 5 * time.Second
 	joinTimeout := 500 * time.Millisecond
-	wait := time.NewTimer(0)
+	var waitDuration time.Duration
+	wait := time.NewTimer(waitDuration)
 	defer wait.Stop()
 
 	for {
@@ -574,6 +574,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			return
 		case <-wait.C:
 		}
+		logger := m.logger.With("loop", "bootstrap", "wait", waitDuration)
 
 		m.muPeers.Lock()
 		peers := slices.Clone(m.peers)
@@ -586,6 +587,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			panic(err)
 		}
 
+		var seeds []string
 		var discovered []string
 		for _, seed := range m.seeds {
 			reqCtx, cancel := context.WithTimeout(ctx, joinTimeout)
@@ -614,9 +616,10 @@ func (m *Member) Bootstrap(ctx context.Context) {
 				logger.Warn("failed to decode join response", "seed", seed, "error", err)
 				continue
 			}
-			logger.Debug("joined seed", "seed", seed)
 			discovered = append(discovered, joined.Peers...)
+			seeds = append(seeds, seed)
 		}
+		logger.Info("joined seeds", "seeds", seeds)
 
 		self := m.Addr()
 		m.muPeers.Lock()
@@ -633,7 +636,8 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		}
 		m.muPeers.Unlock()
 
-		wait.Reset(interval + jitter(interval))
+		waitDuration = interval + jitter(interval)
+		wait.Reset(waitDuration)
 		if interval < 5*time.Minute {
 			interval = min(interval*2, 5*time.Minute)
 		}
