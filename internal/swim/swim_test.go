@@ -20,8 +20,10 @@ import (
 
 func TestNew(t *testing.T) {
 	network := newNetwork(t, 1)
+	network.registerAdvertiseHost(0, "7811223344aabb")
 	validConfig := swim.Config{
 		NodeID:         "node-0",
+		AdvertiseHost:  "7811223344aabb",
 		Conn:           network.conn(0),
 		Listener:       newFakeListener(),
 		Resolve:        network.resolve,
@@ -39,6 +41,10 @@ func TestNew(t *testing.T) {
 		},
 		"MissingNodeID": {
 			cfg:     func() swim.Config { c := validConfig; c.NodeID = ""; return c }(),
+			wantErr: true,
+		},
+		"MissingAdvertiseHost": {
+			cfg:     func() swim.Config { c := validConfig; c.AdvertiseHost = ""; return c }(),
 			wantErr: true,
 		},
 		"MissingConn": {
@@ -223,7 +229,11 @@ func newCluster(t *testing.T, nodes int) *cluster {
 	for i := range nodes {
 		notifiers[i] = &recordingNotifier{}
 	}
+	machineID := func(i int) string { return fmt.Sprintf("machine-%d", i) }
 	network := newNetwork(t, nodes)
+	for i := range nodes {
+		network.registerAdvertiseHost(i, machineID(i))
+	}
 	rt := newJoinRoundTripper()
 	members := make([]*swim.Member, nodes)
 	for i := range nodes {
@@ -235,6 +245,7 @@ func newCluster(t *testing.T, nodes int) *cluster {
 		}
 		cfg := swim.Config{
 			NodeID:         fmt.Sprintf("node-%d", i),
+			AdvertiseHost:  machineID(i),
 			Conn:           network.conn(i),
 			Listener:       newFakeListener(),
 			Seeds:          strings.Join(seeds, ","),
@@ -367,9 +378,25 @@ func (n *network) conn(i int) *conn {
 	return n.conns[i]
 }
 
-// addr returns the hostname:port peer address for node i, mirroring docker-compose hostnames.
+// addr returns the advertise address for node i as seen by SWIM peers.
 func (n *network) addr(i int) string {
-	return n.conns[i].hostAddr
+	c := n.conns[i]
+	if c.advertiseAddr != "" {
+		return c.advertiseAddr
+	}
+	return c.hostAddr
+}
+
+// registerAdvertiseHost registers an additional hostname alias for node i so
+// that resolve can find it when AdvertiseHost differs from the default node-N name.
+func (n *network) registerAdvertiseHost(i int, host string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[i]
+	addr := c.addr
+	advertiseAddr := fmt.Sprintf("%s:%d", host, addr.Port)
+	n.hostToIP[advertiseAddr] = addr
+	c.advertiseAddr = advertiseAddr
 }
 
 // resolve maps a "node-N:port" peer address to its underlying *net.UDPAddr.
@@ -427,11 +454,12 @@ func (n *network) send(toRaw string, from *conn, data []byte) {
 
 // conn implements [net.PacketConn] using the network.
 type conn struct {
-	network  *network
-	addr     *net.UDPAddr
-	hostAddr string
-	ch       chan packet // own receive channel, stored directly for durable blocking under synctest
-	closed   atomic.Bool
+	network       *network
+	addr          *net.UDPAddr
+	hostAddr      string      // node-N:port, used for routing and blocking
+	advertiseAddr string      // advertiseHost:port, matches what swim.Member.Addr() returns
+	ch            chan packet // own receive channel, stored directly for durable blocking under synctest
+	closed        atomic.Bool
 }
 
 func (c *conn) ReadFrom(b []byte) (int, net.Addr, error) {

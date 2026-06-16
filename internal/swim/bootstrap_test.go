@@ -23,9 +23,11 @@ import (
 func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, 1)
+		network.registerAdvertiseHost(0, "machine-0")
 		rt := newJoinRoundTripper()
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
+			AdvertiseHost:  "machine-0",
 			Conn:           network.conn(0),
 			Listener:       newFakeListener(),
 			Seeds:          "",
@@ -61,9 +63,11 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
 		network := newNetwork(t, 1)
+		network.registerAdvertiseHost(0, "machine-0")
 		rt := newJoinRoundTripper()
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
+			AdvertiseHost:  "machine-0",
 			Conn:           network.conn(0),
 			Listener:       newFakeListener(),
 			Seeds:          "node-1:8080",
@@ -98,10 +102,13 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, 2)
+		network.registerAdvertiseHost(0, "machine-0")
+		network.registerAdvertiseHost(1, "machine-1")
 		rt := newJoinRoundTripper()
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
+			AdvertiseHost:  "machine-0",
 			Conn:           network.conn(0),
 			Listener:       newFakeListener(),
 			Seeds:          "node-1:8080",
@@ -115,6 +122,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 
 		m1, err := swim.New(swim.Config{
 			NodeID:         "node-1",
+			AdvertiseHost:  "machine-1",
 			Conn:           network.conn(1),
 			Listener:       newFakeListener(),
 			Seeds:          "",
@@ -170,10 +178,14 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 func TestBootstrapJoinPushPull(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, 3)
+		network.registerAdvertiseHost(0, "machine-0")
+		network.registerAdvertiseHost(1, "machine-1")
+		network.registerAdvertiseHost(2, "machine-2")
 		rt := newJoinRoundTripper()
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
+			AdvertiseHost:  "machine-0",
 			Conn:           network.conn(0),
 			Listener:       newFakeListener(),
 			Seeds:          "node-1:8080",
@@ -188,6 +200,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 		// node-1 has no seeds: it can only learn node-0 via push from node-0's join request.
 		m1, err := swim.New(swim.Config{
 			NodeID:         "node-1",
+			AdvertiseHost:  "machine-1",
 			Conn:           network.conn(1),
 			Listener:       newFakeListener(),
 			Seeds:          "",
@@ -201,6 +214,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 
 		m2, err := swim.New(swim.Config{
 			NodeID:         "node-2",
+			AdvertiseHost:  "machine-2",
 			Conn:           network.conn(2),
 			Listener:       newFakeListener(),
 			Seeds:          "node-1:8080",
@@ -338,4 +352,3 @@ func (rt *joinRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	m.JoinHandler(w, req)
 	return w.Result(), nil
 }
-

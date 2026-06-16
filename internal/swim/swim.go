@@ -27,10 +27,11 @@ import (
 
 // Member is a node participating in the SWIM failure detection protocol.
 type Member struct {
-	nodeID   string
-	conn     net.PacketConn
-	listener net.Listener
-	server   *http.Server
+	nodeID        string
+	advertiseHost string
+	conn          net.PacketConn
+	listener      net.Listener
+	server        *http.Server
 
 	seeds      []string
 	httpClient *http.Client
@@ -57,9 +58,10 @@ type Member struct {
 
 // Config holds the configuration for creating a Member.
 type Config struct {
-	NodeID   string
-	Conn     net.PacketConn // UDP connection to receive and send packets on
-	Listener net.Listener   // TCP listener for the HTTP join endpoint
+	NodeID        string         // unique node identifier, used for logging
+	AdvertiseHost string         // host advertised to SWIM peers, must match how peers address this node
+	Conn          net.PacketConn // UDP connection to receive and send packets on
+	Listener      net.Listener   // TCP listener for the HTTP join endpoint
 
 	Seeds      string                              // comma-separated list of seed HTTP addresses for the bootstrap loop (e.g. host1:7947,host2:7947)
 	HTTPClient *http.Client                        // HTTP client for bootstrap join calls; if nil, defaults to http.DefaultClient
@@ -79,6 +81,9 @@ type Config struct {
 func New(cfg Config) (*Member, error) {
 	if cfg.NodeID == "" {
 		return nil, errors.New("node ID is required")
+	}
+	if cfg.AdvertiseHost == "" {
+		return nil, errors.New("advertise host is required")
 	}
 	if cfg.Conn == nil {
 		return nil, errors.New("conn is required")
@@ -145,6 +150,7 @@ func New(cfg Config) (*Member, error) {
 	}
 	m := &Member{
 		nodeID:              cfg.NodeID,
+		advertiseHost:       cfg.AdvertiseHost,
 		conn:                cfg.Conn,
 		listener:            cfg.Listener,
 		server:              &server,
@@ -219,9 +225,10 @@ type relayKey struct {
 	period uint64
 }
 
+// Addr returns the address this node advertises to SWIM peers (host:port).
 func (m *Member) Addr() string {
 	addr := m.conn.LocalAddr().(*net.UDPAddr)
-	return m.nodeID + ":" + strconv.Itoa(addr.Port)
+	return m.advertiseHost + ":" + strconv.Itoa(addr.Port)
 }
 
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to

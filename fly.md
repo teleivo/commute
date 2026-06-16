@@ -56,12 +56,15 @@ curl localhost:8080/counters/visitors
 Fly.io does not support CLI arguments. `fly-init.sh` runs as the entrypoint (via `Dockerfile.fly`)
 and maps Fly environment variables to `co server` flags:
 
-* `NODE_NAME` is set by `fly.sh` and becomes `--node-id` and `--advertise-addr`. Fly does not
-  inject the machine name, so it must be passed explicitly.
-* `PEERS` is set by `fly.sh` as a comma-separated list of peer names and gets expanded to
-  `<name>.vm.commute.internal:<port>` for both HTTP (`--peers`, port 8080) and SWIM bootstrap
-  (`--swim-seeds`, port 7947)
+* `NODE_NAME` is set by `fly.sh` and becomes `--node-id`, the stable CRDT identity that survives
+  machine replacement. Fly does not inject the machine name, so it must be passed explicitly.
+* `PEER_IDS` is set by `fly.sh` to the comma-separated peer machine IDs and gets expanded to
+  `<id>.vm.commute.internal:<port>` for network addresses (`--peers` port 8080, `--swim-seeds`
+  port 7947). Fly only registers `<machine-id>.vm.<app>.internal` in DNS, not name-based hostnames,
+  so machine IDs are required for network connectivity. `FLY_MACHINE_ID` is injected automatically
+  by Fly and used for `--advertise-addr`.
 * `DEBUG=1` enables debug logging
 
-Nodes communicate over **6PN** (Fly's IPv6 WireGuard mesh). Each machine is reachable at
-`<name>.vm.commute.internal`. DNS names are stable across stop/start but reset on destroy/recreate.
+Nodes communicate over **6PN** (Fly's IPv6 WireGuard mesh). Machine-ID-based DNS names are stable
+across stop/start but change on destroy/recreate. `NODE_NAME` (`node-0` etc.) is used only as the
+CRDT node identity and appears in logs, keeping them readable regardless of machine replacements.

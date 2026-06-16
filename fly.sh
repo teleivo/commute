@@ -4,7 +4,7 @@
 # Usage: ./fly.sh <command>
 #
 # Commands:
-#   deploy    create or update all machines to the latest image, then start them
+#   deploy    build image and create or update machines if image or config changed, then start them
 #   start     start all stopped machines
 #   stop      stop all running machines
 #   status    list all machines with their current state
@@ -13,29 +13,35 @@ set -eu
 
 APP="commute"
 
+machines_json() {
+    fly machine list --app "${APP}" --json
+}
+
 # Returns the machine ID for the given name, or empty string if not found.
 machine_id() {
-    fly machine list --app "${APP}" --json \
+    machines_json \
         | jq --raw-output --arg name "${1}" '.[] | select(.name == $name) | .id'
 }
 
 # Returns the full image ref (including digest) for the given machine name,
 # or empty string if not found.
 machine_image() {
-    fly machine list --app "${APP}" --json \
+    machines_json \
         | jq --raw-output --arg name "${1}" '.[] | select(.name == $name) | .config.image'
 }
 
 # Returns the env value for the given machine name and key, or empty string.
 machine_env() {
-    fly machine list --app "${APP}" --json \
+    machines_json \
         | jq --raw-output --arg name "${1}" --arg key "${2}" \
             '.[] | select(.name == $name) | .config.env[$key] // ""'
 }
 
-cmd_deploy() {
+# Builds and pushes the image, prints build output to stderr, and prints the
+# image ref (registry.fly.io/...@sha256:...) to stdout.
+build_image() {
     build_output=$(fly deploy --build-only --push --app "${APP}" 2>&1)
-    echo "${build_output}"
+    echo "${build_output}" >&2
     new_image=$(echo "${build_output}" \
         | grep 'pushing manifest for' \
         | grep -o 'registry\.fly\.io/[^@]*@sha256:[a-f0-9]*' \
@@ -44,44 +50,65 @@ cmd_deploy() {
         echo "error: could not determine built image ref" >&2
         exit 1
     fi
-    echo "built image: ${new_image}"
+    echo "${new_image}"
+}
 
-    deploy_machine node-0 ams node-1,node-2 "${new_image}"
-    deploy_machine node-1 fra node-0,node-2 "${new_image}"
-    deploy_machine node-2 lhr node-0,node-1 "${new_image}"
+cmd_deploy() {
+    new_image=$(build_image)
+
+    # Pass 1: create any machines that do not exist yet (without peer IDs since
+    # IDs are not known until all machines exist).
+    create_machine_if_missing node-0 ams "${new_image}"
+    create_machine_if_missing node-1 fra "${new_image}"
+    create_machine_if_missing node-2 lhr "${new_image}"
+
+    # Fetch IDs now that all machines exist.
+    id0=$(machine_id node-0)
+    id1=$(machine_id node-1)
+    id2=$(machine_id node-2)
+
+    # Pass 2: update each machine with peer IDs (own ID is injected by Fly as FLY_MACHINE_ID).
+    update_machine node-0 "${new_image}" "${id1},${id2}"
+    update_machine node-1 "${new_image}" "${id0},${id2}"
+    update_machine node-2 "${new_image}" "${id0},${id1}"
+
     cmd_start
 }
 
-deploy_machine() {
+create_machine_if_missing() {
     name="${1}"
     region="${2}"
-    peers="${3}"
-    new_image="${4}"
+    new_image="${3}"
 
     id=$(machine_id "${name}")
-    if [ -n "${id}" ]; then
-        current_image=$(machine_image "${name}")
-        current_node_name=$(machine_env "${name}" "NODE_NAME")
-        current_peers=$(machine_env "${name}" "PEERS")
-        if [ "${current_image}" = "${new_image}" ] \
-            && [ "${current_node_name}" = "${name}" ] \
-            && [ "${current_peers}" = "${peers}" ]; then
-            echo "${name}: already up to date, skipping"
-            return
-        fi
-        echo "${name}: updating (id=${id})"
-        fly machine update "${id}" --app "${APP}" \
-            --image "${new_image}" \
-            --env NODE_NAME="${name}" \
-            --env PEERS="${peers}" \
-            --yes
-    else
+    if [ -z "${id}" ]; then
         echo "${name}: creating in ${region}"
-        fly machine run . --app "${APP}" --name "${name}" --region "${region}" \
-            --image "${new_image}" \
-            --env NODE_NAME="${name}" \
-            --env PEERS="${peers}"
+        fly machine run "${new_image}" --app "${APP}" --name "${name}" --region "${region}" \
+            --env NODE_NAME="${name}"
     fi
+}
+
+update_machine() {
+    name="${1}"
+    new_image="${2}"
+    peer_ids="${3}"
+
+    id=$(machine_id "${name}")
+    current_image=$(machine_image "${name}")
+    current_peer_ids=$(machine_env "${name}" "PEER_IDS")
+
+    if [ "${current_image}" = "${new_image}" ] \
+        && [ "${current_peer_ids}" = "${peer_ids}" ]; then
+        echo "${name}: already up to date, skipping"
+        return
+    fi
+
+    echo "${name}: updating (id=${id})"
+    fly machine update "${id}" --app "${APP}" \
+        --image "${new_image}" \
+        --env NODE_NAME="${name}" \
+        --env PEER_IDS="${peer_ids}" \
+        --yes
 }
 
 cmd_start() {
