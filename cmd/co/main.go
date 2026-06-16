@@ -153,7 +153,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if *advertiseAddr == "" {
 		return 2, errors.New("advertise-addr is required")
 	}
-	if _, _, err := net.SplitHostPort(*advertiseAddr); err != nil {
+	advertiseHost, _, err := net.SplitHostPort(*advertiseAddr)
+	if err != nil {
 		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
 	}
 	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
@@ -198,6 +199,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		}
 		member, err := swim.New(swim.Config{
 			NodeID:              *nodeID,
+			AdvertiseHost:       advertiseHost,
 			Conn:                swimConn,
 			Listener:            lnSwim,
 			Seeds:               *swimSeeds,
