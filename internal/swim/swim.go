@@ -234,6 +234,7 @@ func (m *Member) Addr() string {
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
 func (m *Member) Listen(ctx context.Context) {
+	logger := m.logger.With("loop", "listen")
 	relayAcks := make(map[relayKey]chan Ack)
 	var mu sync.RWMutex
 
@@ -244,23 +245,23 @@ func (m *Member) Listen(ctx context.Context) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			m.logger.Error("failed to read UDP message", "error", err)
+			logger.Error("failed to read UDP message", "error", err)
 			continue
 		}
 		var msg Message
 		if err := msg.UnmarshalBinary(b[:n]); err != nil {
-			m.logger.Error("failed to parse message", "addr", addr, "error", err)
+			logger.Error("failed to parse message", "addr", addr, "error", err)
 			continue
 		}
 
 		for _, e := range msg.Events {
 			if e.Kind == Dead {
-				m.logger.Info("peer is dead", "peer", e.Node, "source", addr)
+				logger.Info("peer is dead", "peer", e.Node, "source", addr)
 				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: e.Node}})
 			}
 		}
 
-		m.logger.Debug("got message", "addr", addr, "src", msg.Src, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
+		logger.Debug("got message", "addr", addr, "src", msg.Src, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
 		switch msg.Kind {
 		case ack:
 			ackAddr := msg.Src
@@ -290,7 +291,7 @@ func (m *Member) Listen(ctx context.Context) {
 			_ = m.sendToAddr(addr.String(), addr, reply)
 		case pingReq:
 			if msg.Target == "" {
-				m.logger.Warn("message is missing required target for indirect ping", "addr", addr)
+				logger.Warn("message is missing required target for indirect ping", "addr", addr)
 				continue
 			}
 
@@ -345,6 +346,7 @@ type Notifier interface {
 // random peer, sends a ping, and waits up to AckTimeout for a direct ack before
 // declaring the peer dead and removing it from the peer list.
 func (m *Member) Probe(ctx context.Context) {
+	logger := m.logger.With("loop", "probe")
 	periodTimer := time.NewTimer(m.protocolPeriod)
 	defer periodTimer.Stop()
 	ackTimeout := time.NewTimer(m.ackTimeout)
@@ -361,7 +363,7 @@ func (m *Member) Probe(ctx context.Context) {
 		m.muPeers.RLock()
 		if len(m.peers) == 0 {
 			m.muPeers.RUnlock()
-			m.logger.Warn("no peers to send ping to")
+			logger.Warn("no peers to send ping to")
 			select {
 			case <-ctx.Done():
 				return
@@ -392,7 +394,7 @@ func (m *Member) Probe(ctx context.Context) {
 				// indirect ping-req as we did not receive an ack to direct ping on time
 				indirects, ok := m.kRandomPeers(peer)
 				if !ok {
-					m.logger.Warn("no peers to send ping-req to")
+					logger.Warn("no peers to send ping-req to")
 					continue
 				}
 
@@ -402,12 +404,12 @@ func (m *Member) Probe(ctx context.Context) {
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
-				m.logger.Info("peer is dead", "peer", peer, "period", period)
+				logger.Info("peer is dead", "peer", peer, "period", period)
 				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: peer}})
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr == peer {
-					m.logger.Debug("peer is alive", "peer", peer, "period", period)
+					logger.Debug("peer is alive", "peer", peer, "period", period)
 					ackTimeout.Stop()
 					// wait for the period to expire before moving on to the next probe
 					select {
@@ -554,6 +556,7 @@ func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
 // extra dependency since the server is already in place, and fits the time constraints of this
 // learning project.
 func (m *Member) Bootstrap(ctx context.Context) {
+	logger := m.logger.With("loop", "bootstrap")
 	jitter := func(interval time.Duration) time.Duration {
 		m.muRng.Lock()
 		j := m.rng.Int64N(int64(min(interval/6, 5*time.Second)))
@@ -595,12 +598,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			resp, err := m.httpClient.Do(req)
 			cancel()
 			if err != nil {
-				m.logger.Warn("failed to join seed", "seed", seed, "error", err)
+				logger.Warn("failed to join seed", "seed", seed, "error", err)
 				continue
 			}
 			if resp.StatusCode != http.StatusOK {
 				_ = resp.Body.Close()
-				m.logger.Warn("join rejected by seed", "seed", seed, "status", resp.StatusCode)
+				logger.Warn("join rejected by seed", "seed", seed, "status", resp.StatusCode)
 				continue
 			}
 
@@ -608,10 +611,10 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			err = json.NewDecoder(resp.Body).Decode(&joined)
 			_ = resp.Body.Close()
 			if err != nil {
-				m.logger.Warn("failed to decode join response", "seed", seed, "error", err)
+				logger.Warn("failed to decode join response", "seed", seed, "error", err)
 				continue
 			}
-			m.logger.Debug("joined seed", "seed", seed)
+			logger.Debug("joined seed", "seed", seed)
 			discovered = append(discovered, joined.Peers...)
 		}
 
