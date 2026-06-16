@@ -40,7 +40,7 @@ machine_env() {
 # Builds and pushes the image, prints build output to stderr, and prints the
 # image ref (registry.fly.io/...@sha256:...) to stdout.
 build_image() {
-    build_output=$(fly deploy --build-only --push --app "${APP}" 2>&1)
+    build_output=$(fly deploy --build-only --push --no-cache --app "${APP}" 2>&1)
     echo "${build_output}" >&2
     new_image=$(echo "${build_output}" \
         | grep 'pushing manifest for' \

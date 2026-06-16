@@ -160,6 +160,7 @@ func (srv *Server) Start(ctx context.Context) error {
 // StartGossip runs the gossip loop, periodically pushing full state to a random peer. It blocks
 // until the context is cancelled.
 func (srv *Server) StartGossip(ctx context.Context) {
+	logger := srv.logger.With("loop", "gossip")
 	t := time.NewTicker(srv.gossipInterval)
 	defer t.Stop()
 	timeout := srv.gossipInterval / 2
@@ -190,15 +191,15 @@ func (srv *Server) StartGossip(ctx context.Context) {
 			resp, err := srv.client.Do(req)
 			cancel()
 			if err != nil {
-				srv.logger.Warn("failed to gossip state", "peer", peer, "error", err)
+				logger.Warn("failed to gossip state", "peer", peer, "error", err)
 				continue
 			}
 			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
-				srv.logger.Warn("gossip rejected", "peer", peer, "status", resp.StatusCode)
+				logger.Warn("gossip rejected", "peer", peer, "status", resp.StatusCode)
 				continue
 			}
-			srv.logger.Debug("gossiped state", "peer", peer)
+			logger.Debug("gossiped state", "peer", peer)
 		case <-ctx.Done():
 			return
 		}

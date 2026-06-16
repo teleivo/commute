@@ -8,6 +8,10 @@
 
 ## SWIM
 
+* Treat resolve error in `Probe` as a failed send so it falls through to indirect ping-req and
+  eventually peer-dead declaration, instead of silently skipping the period. Currently a peer whose
+  DNS entry disappears (e.g. stopped container) loops forever in resolve errors and is never removed.
+
 * 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
 * Alive events: two halves of the same feature, both needed together. Not needed for the demo
