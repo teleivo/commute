@@ -62,7 +62,7 @@ cmd_deploy() {
     build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     new_image=$(build_image "${commit}" "${build_time}")
 
-    # Pass 1: create any machines that do not exist yet (without peer IDs since
+    # Pass 1: create any machines that do not exist yet (without seed IDs since
     # IDs are not known until all machines exist).
     create_machine_if_missing node-0 ams "${new_image}" "${commit}"
     create_machine_if_missing node-1 fra "${new_image}" "${commit}"
@@ -73,7 +73,7 @@ cmd_deploy() {
     id1=$(machine_id node-1)
     id2=$(machine_id node-2)
 
-    # Pass 2: update each machine with peer IDs (own ID is injected by Fly as FLY_MACHINE_ID).
+    # Pass 2: update each machine with seed IDs (own ID is injected by Fly as FLY_MACHINE_ID).
     update_machine node-0 "${new_image}" "${id1},${id2}" "${commit}"
     update_machine node-1 "${new_image}" "${id0},${id2}" "${commit}"
     update_machine node-2 "${new_image}" "${id0},${id1}" "${commit}"
@@ -99,16 +99,16 @@ create_machine_if_missing() {
 update_machine() {
     name="${1}"
     new_image="${2}"
-    peer_ids="${3}"
+    seed_ids="${3}"
     commit="${4}"
 
     id=$(machine_id "${name}")
     current_image=$(machine_image "${name}")
-    current_peer_ids=$(machine_env "${name}" "CO_PEER_IDS")
+    current_seed_ids=$(machine_env "${name}" "CO_SEED_IDS")
     current_commit=$(machine_env "${name}" "CO_COMMIT")
 
     if [ "${current_image}" = "${new_image}" ] \
-        && [ "${current_peer_ids}" = "${peer_ids}" ] \
+        && [ "${current_seed_ids}" = "${seed_ids}" ] \
         && [ "${current_commit}" = "${commit}" ]; then
         echo "${name}: already up to date, skipping"
         return
@@ -118,7 +118,7 @@ update_machine() {
     fly machine update "${id}" --app "${APP}" \
         --image "${new_image}" \
         --env CO_NODE_NAME="${name}" \
-        --env CO_PEER_IDS="${peer_ids}" \
+        --env CO_SEED_IDS="${seed_ids}" \
         --env CO_COMMIT="${commit}" \
         --yes
 }

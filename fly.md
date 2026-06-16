@@ -58,8 +58,8 @@ and maps Fly environment variables to `co server` flags:
 
 * `NODE_NAME` is set by `fly.sh` and becomes `--node-id`, the stable CRDT identity that survives
   machine replacement. Fly does not inject the machine name, so it must be passed explicitly.
-* `PEER_IDS` is set by `fly.sh` to the comma-separated peer machine IDs and gets expanded to
-  `<id>.vm.commute.internal:<port>` for network addresses (`--peers` port 8080, `--swim-seeds`
+* `CO_SEED_IDS` is set by `fly.sh` to the comma-separated seed machine IDs and gets expanded to
+  `<id>.vm.commute.internal:<port>` for bootstrap addresses (`--peers` port 8080, `--swim-seeds`
   port 7947). Fly only registers `<machine-id>.vm.<app>.internal` in DNS, not name-based hostnames,
   so machine IDs are required for network connectivity. `FLY_MACHINE_ID` is injected automatically
   by Fly and used for `--advertise-addr`.
