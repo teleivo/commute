@@ -133,6 +133,11 @@ cmd_stop() {
         "$(machine_id node-0)" "$(machine_id node-1)" "$(machine_id node-2)"
 }
 
+cmd_pause() {
+    fly machine suspend --app "${APP}" \
+        "$(machine_id node-0)" "$(machine_id node-1)" "$(machine_id node-2)"
+}
+
 cmd_status() {
     machines_json \
         | jq --raw-output \
@@ -144,6 +149,7 @@ case "${1:-}" in
     deploy) cmd_deploy ;;
     start)  cmd_start ;;
     stop)   cmd_stop ;;
+    pause)  cmd_pause ;;
     status) cmd_status ;;
     *)
         cat >&2 <<'EOF'
@@ -153,6 +159,7 @@ commands:
   deploy    build image and create or update machines if image or config changed, then start them
   start     start all stopped machines
   stop      stop all running machines
+  pause     suspend all machines (faster resume than stop)
   status    list all machines with their current state
 EOF
         exit 1
