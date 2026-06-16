@@ -100,6 +100,8 @@ func New(cfg Config) (*Member, error) {
 				return nil, err
 			}
 
+			ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
 			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 			if err != nil {
 				return nil, err

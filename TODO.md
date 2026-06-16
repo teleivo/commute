@@ -1,5 +1,10 @@
 # TODO
 
+* Treat resolve error in `Probe` as a failed send so it falls through to indirect ping-req and
+  eventually peer-dead declaration, instead of silently skipping the period. Currently a peer whose
+  DNS entry disappears (e.g. stopped container) loops forever in resolve errors and is never removed.
+  * then merge to main
+
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
