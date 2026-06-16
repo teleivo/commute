@@ -35,7 +35,7 @@ type Member struct {
 
 	seeds      []string
 	httpClient *http.Client
-	resolve    func(addr string) (net.Addr, error)
+	resolve    func(ctx context.Context, addr string) (net.Addr, error)
 
 	// muPeers guards peers and deadPeers
 	peers     []string
@@ -63,9 +63,9 @@ type Config struct {
 	Conn          net.PacketConn // UDP connection to receive and send packets on
 	Listener      net.Listener   // TCP listener for the HTTP join endpoint
 
-	Seeds      string                              // comma-separated list of seed HTTP addresses for the bootstrap loop (e.g. host1:7947,host2:7947)
-	HTTPClient *http.Client                        // HTTP client for bootstrap join calls; if nil, defaults to http.DefaultClient
-	Resolve    func(addr string) (net.Addr, error) // if nil, defaults to net.ResolveUDPAddr
+	Seeds      string                                                   // comma-separated list of seed HTTP addresses for the bootstrap loop (e.g. host1:7947,host2:7947)
+	HTTPClient *http.Client                                             // HTTP client for bootstrap join calls; if nil, defaults to http.DefaultClient
+	Resolve    func(ctx context.Context, addr string) (net.Addr, error) // if nil, resolves via DNS preferring IPv6
 
 	ProtocolPeriod      time.Duration // T' in the paper: duration of one failure detection round
 	AckTimeout          time.Duration // how long to wait for a direct ack before declaring a peer dead
@@ -90,8 +90,29 @@ func New(cfg Config) (*Member, error) {
 	}
 	resolve := cfg.Resolve
 	if resolve == nil {
-		resolve = func(addr string) (net.Addr, error) {
-			return net.ResolveUDPAddr("udp", addr)
+		resolve = func(ctx context.Context, addr string) (net.Addr, error) {
+			host, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				return nil, err
+			}
+
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips { // prefer IPv6
+				if ip.To4() == nil {
+					return &net.UDPAddr{IP: ip, Port: port}, nil
+				}
+			}
+			for _, ip := range ips { // fallback to IPv4
+				return &net.UDPAddr{IP: ip, Port: port}, nil
+			}
+			return nil, fmt.Errorf("failed to resolve IP for %q", addr)
 		}
 	}
 	seeds := make(map[string]struct{})
@@ -305,7 +326,7 @@ func (m *Member) Listen(ctx context.Context) {
 				defer done()
 
 				target := msg.Target
-				if err := m.send(target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
+				if err := m.send(ctx, target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
 					return
 				}
 
@@ -375,7 +396,7 @@ func (m *Member) Probe(ctx context.Context) {
 		m.muPeers.RUnlock()
 
 		// direct ping
-		if err := m.send(peer, NewMessage(ping, m.Addr(), period, "")); err != nil {
+		if err := m.send(ctx, peer, NewMessage(ping, m.Addr(), period, "")); err != nil {
 			select {
 			case <-ctx.Done():
 				return
@@ -399,7 +420,7 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 
 				for _, indirect := range indirects {
-					_ = m.send(indirect, NewMessage(pingReq, m.Addr(), period, peer))
+					_ = m.send(ctx, indirect, NewMessage(pingReq, m.Addr(), period, peer))
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
@@ -491,10 +512,10 @@ func (m *Member) randomPeer() string {
 }
 
 // send delivers msg to peer by resolving its address and writing the message.
-func (m *Member) send(peer string, msg Message) error {
-	addr, err := m.resolve(peer)
+func (m *Member) send(ctx context.Context, peer string, msg Message) error {
+	addr, err := m.resolve(ctx, peer)
 	if err != nil {
-		m.logger.Error("failed to resolve address for peer", "peer", peer)
+		m.logger.Error("failed to resolve address for peer", "peer", peer, "error", err)
 		return fmt.Errorf("failed to resolve address for peer %q", peer)
 	}
 	return m.sendToAddr(peer, addr, msg)
