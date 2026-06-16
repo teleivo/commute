@@ -1,12 +1,63 @@
 # TODO
 
+* Notify server of new peers via Alive event on join/bootstrap so `srv.peers` is populated
+  dynamically and `--peers` flag can be removed. No incarnation numbers needed yet — conflicts
+  between Alive/Suspect/Confirm only matter once Suspicion is implemented (SWIM §4.2).
+  The challenge: `Notify` receives the SWIM UDP peer address (`host:udpPort`) but `srv.peers`
+  needs the HTTP address (`host:httpPort`). The HTTP port is not fixed — `--addr` defaults to
+  `:0` (OS-assigned), so ports differ per node and a homogeneous-port assumption is wrong.
+  Two approaches:
+  * Add `HTTPPort uint16` to `Event`. The node knows its own HTTP port from `--advertise-addr`
+    at startup and embeds it in every `Alive` event it originates. `Notify(Alive)` receives
+    the SWIM UDP addr plus HTTP port and reconstructs the full HTTP peer address. Requires a
+    wire format change to `Event` (2 extra bytes, version bump) but keeps `Node` clearly as a
+    SWIM UDP addr and makes the HTTP port explicit. This is the right approach.
+  * Run everything on one port (TCP only, no UDP). Corrosion/foca do this via QUIC. Requires
+    replacing the UDP PacketConn with a TCP/QUIC listener for SWIM probing — a full redesign.
+    UDP and TCP can share the same port *number* (separate OS namespaces) but not the same
+    socket, so "one port" really means switching transports, not multiplexing.
+
+## Demo
+
+Show a PN-Counter diverging and converging across a live multi-region cluster on Fly.io. A load
+generator inside Fly hammers all nodes concurrently (low WAN latency from inside the 6PN mesh).
+A local Prometheus + Grafana stack scrapes the Amsterdam node via `fly proxy` and graphs the
+running counter value over time. The audience watches divergence under load and convergence once
+the generator stops.
+
+### What needs to be built
+
+* Expose `/metrics` on each node: PN-Counter current value as a Prometheus gauge (one label per
+  counter key). This is the blocker for everything else in the demo.
+* Local Prometheus config that scrapes `localhost:8080/metrics` (proxied ams node).
+* Grafana dashboard: single time-series panel — counter value on the ams node vs. time. Mark the
+  moment the load generator stops so convergence is visible.
+* Load generator: a small program (or shell script with background curls) deployed as a Fly
+  machine inside the 6PN mesh. It sends `POST /counters/<key>` increments to all node HTTP
+  endpoints concurrently. Needs a list of node addresses (same `<id>.vm.commute.internal` pattern)
+  and a configurable rate. Start/stop it via `fly machine start/suspend`.
+* Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
+  pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
+  demo to show a node joining the cluster live.
+* Add a `demo-node` command to `fly.sh` to start/suspend the pre-created demo nodes by name.
+
+### Demo flow
+
+1. `./fly.sh start` — wake the 3 base nodes
+2. `fly machine start <demo-node>` — show a new region joining (bootstrap loop, SWIM membership)
+3. `fly proxy 8080:8080 --app commute --select` — proxy ams node for Prometheus scrape
+4. Open Grafana, start load generator machine
+5. Watch counter on ams diverge from the true total as gossip lags
+6. Stop load generator — watch convergence on the Grafana panel
+7. `./fly.sh pause` + suspend demo node when done
+
+## SWIM
+
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
 * Prometheus counter metric: expose PN-Counter value per node so Grafana can graph divergence and
   convergence across nodes during the demo
-
-## SWIM
 
 * 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
