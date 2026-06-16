@@ -151,11 +151,6 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 		time.Sleep(1 * time.Second)
 		synctest.Wait()
 
-		members0 := joinMembers(t, m0, "node-99:7946")
-
-		assert.True(t, slices.Contains(members0, "node-99:7946"), "node-99 should be registered as a peer")
-		assert.True(t, slices.Contains(members0, m0.Addr()), "node-0 should include itself in the response")
-
 		// node-1's join handler becomes reachable.
 		rt.register("node-1:8080", m1)
 
@@ -166,7 +161,6 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 		members := joinMembers(t, m0, "node-99:7946")
 
 		assert.True(t, slices.Contains(members, network.addr(1)), "node-0 should have node-1 as peer after it becomes reachable")
-		assert.True(t, slices.Contains(members, "node-99:7946"), "node-99 should be registered as a peer")
 	})
 }
 

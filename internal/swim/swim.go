@@ -403,14 +403,7 @@ func (m *Member) Probe(ctx context.Context) {
 		}
 
 		// direct ping
-		if err := m.send(ctx, peer, NewMessage(ping, m.Addr(), period, "")); err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-periodTimer.C:
-			}
-			continue
-		}
+		_ = m.send(ctx, peer, NewMessage(ping, m.Addr(), period, ""))
 
 		ackTimeout.Reset(m.ackTimeout)
 	waitAck:
