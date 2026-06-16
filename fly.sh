@@ -40,7 +40,11 @@ machine_env() {
 # Builds and pushes the image, prints build output to stderr, and prints the
 # image ref (registry.fly.io/...@sha256:...) to stdout.
 build_image() {
-    build_output=$(fly deploy --build-only --push --no-cache --app "${APP}" 2>&1)
+    commit="${1}"
+    build_time="${2}"
+    build_output=$(fly deploy --build-only --push --no-cache --app "${APP}" \
+        --build-arg CO_COMMIT="${commit}" \
+        --build-arg BUILD_TIME="${build_time}" 2>&1)
     echo "${build_output}" >&2
     new_image=$(echo "${build_output}" \
         | grep 'pushing manifest for' \
@@ -54,13 +58,15 @@ build_image() {
 }
 
 cmd_deploy() {
-    new_image=$(build_image)
+    commit=$(git rev-parse HEAD)
+    build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    new_image=$(build_image "${commit}" "${build_time}")
 
     # Pass 1: create any machines that do not exist yet (without peer IDs since
     # IDs are not known until all machines exist).
-    create_machine_if_missing node-0 ams "${new_image}"
-    create_machine_if_missing node-1 fra "${new_image}"
-    create_machine_if_missing node-2 lhr "${new_image}"
+    create_machine_if_missing node-0 ams "${new_image}" "${commit}"
+    create_machine_if_missing node-1 fra "${new_image}" "${commit}"
+    create_machine_if_missing node-2 lhr "${new_image}" "${commit}"
 
     # Fetch IDs now that all machines exist.
     id0=$(machine_id node-0)
@@ -68,9 +74,9 @@ cmd_deploy() {
     id2=$(machine_id node-2)
 
     # Pass 2: update each machine with peer IDs (own ID is injected by Fly as FLY_MACHINE_ID).
-    update_machine node-0 "${new_image}" "${id1},${id2}"
-    update_machine node-1 "${new_image}" "${id0},${id2}"
-    update_machine node-2 "${new_image}" "${id0},${id1}"
+    update_machine node-0 "${new_image}" "${id1},${id2}" "${commit}"
+    update_machine node-1 "${new_image}" "${id0},${id2}" "${commit}"
+    update_machine node-2 "${new_image}" "${id0},${id1}" "${commit}"
 
     cmd_start
 }
@@ -79,12 +85,14 @@ create_machine_if_missing() {
     name="${1}"
     region="${2}"
     new_image="${3}"
+    commit="${4}"
 
     id=$(machine_id "${name}")
     if [ -z "${id}" ]; then
         echo "${name}: creating in ${region}"
         fly machine run "${new_image}" --app "${APP}" --name "${name}" --region "${region}" \
-            --env NODE_NAME="${name}"
+            --env CO_NODE_NAME="${name}" \
+            --env CO_COMMIT="${commit}"
     fi
 }
 
@@ -92,13 +100,16 @@ update_machine() {
     name="${1}"
     new_image="${2}"
     peer_ids="${3}"
+    commit="${4}"
 
     id=$(machine_id "${name}")
     current_image=$(machine_image "${name}")
-    current_peer_ids=$(machine_env "${name}" "PEER_IDS")
+    current_peer_ids=$(machine_env "${name}" "CO_PEER_IDS")
+    current_commit=$(machine_env "${name}" "CO_COMMIT")
 
     if [ "${current_image}" = "${new_image}" ] \
-        && [ "${current_peer_ids}" = "${peer_ids}" ]; then
+        && [ "${current_peer_ids}" = "${peer_ids}" ] \
+        && [ "${current_commit}" = "${commit}" ]; then
         echo "${name}: already up to date, skipping"
         return
     fi
@@ -106,8 +117,9 @@ update_machine() {
     echo "${name}: updating (id=${id})"
     fly machine update "${id}" --app "${APP}" \
         --image "${new_image}" \
-        --env NODE_NAME="${name}" \
-        --env PEER_IDS="${peer_ids}" \
+        --env CO_NODE_NAME="${name}" \
+        --env CO_PEER_IDS="${peer_ids}" \
+        --env CO_COMMIT="${commit}" \
         --yes
 }
 
@@ -122,7 +134,10 @@ cmd_stop() {
 }
 
 cmd_status() {
-    fly machine list --app "${APP}"
+    machines_json \
+        | jq --raw-output \
+            '.[] | [.name, .state, .region, (.config.env.CO_COMMIT // "unknown")] | @tsv' \
+        | column --table --table-columns NAME,STATE,REGION,CO_COMMIT
 }
 
 case "${1:-}" in

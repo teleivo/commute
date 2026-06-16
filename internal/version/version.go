@@ -1,13 +1,14 @@
 // Package version provides build version information.
 package version
 
-import "runtime/debug"
+import "fmt"
 
-// Version returns the module version from embedded build info.
+var (
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
+// Version returns the build version.
 func Version() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "unknown"
-	}
-	return info.Main.Version
+	return fmt.Sprintf("commit=%s buildTime=%s", commit, buildTime)
 }

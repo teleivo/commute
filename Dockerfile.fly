@@ -3,9 +3,19 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /bin/co ./cmd/co
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build \
+    -ldflags="-X github.com/teleivo/commute/internal/version.commit=${COMMIT} \
+              -X github.com/teleivo/commute/internal/version.buildTime=${BUILD_TIME}" \
+    -o /bin/co ./cmd/co
 
 FROM alpine:3
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 RUN apk add --no-cache bind-tools
 COPY --from=build /bin/co /bin/co
 COPY fly-init.sh /bin/fly-init.sh
