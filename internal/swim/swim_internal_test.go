@@ -82,7 +82,7 @@ func TestSendToAddrEventRequeuedOnFailure(t *testing.T) {
 		conn:                closed,
 		disseminationFactor: 2,
 		// one peer keeps log2(len(peers)+1) > 0 so events survive re-enqueue
-		peers: []string{"127.0.0.1:9999"},
+		peers: []Peer{{udpAddr: "127.0.0.1:9999"}},
 	}
 	e := EventItem{Event: Event{Kind: Dead, Node: "192.168.1.1:7946"}}
 	m.eventQueue.Push(e)
@@ -106,7 +106,7 @@ func TestSendToAddrEventDissemination(t *testing.T) {
 		logger:              slog.New(slog.DiscardHandler),
 		conn:                discard,
 		disseminationFactor: 2,
-		peers:               []string{"127.0.0.1:9001", "127.0.0.1:9002"},
+		peers:               []Peer{{udpAddr: "127.0.0.1:9001"}, {udpAddr: "127.0.0.1:9002"}},
 	}
 	const maxDisseminations = 4 // ceil(2 x log2(2+1)) = ceil(2 x 1.58) = 4
 
@@ -128,50 +128,57 @@ func TestSendToAddrEventDissemination(t *testing.T) {
 
 // TestKRandomPeers verifies peer selection for indirect probing.
 func TestKRandomPeers(t *testing.T) {
+	peers := func(addrs ...string) []Peer {
+		ps := make([]Peer, len(addrs))
+		for i, a := range addrs {
+			ps[i] = Peer{udpAddr: a}
+		}
+		return ps
+	}
 	tests := map[string]struct {
-		peers        []string
+		peers        []Peer
 		nodeID       string
 		subgroupSize int
-		target       string
+		target       Peer
 		wantNone     bool
 		wantCount    int
 	}{
 		"NoCandidatesOnlyTargetInPeers": {
-			peers:        []string{"node-1:7946"},
+			peers:        peers("node-1:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 1,
-			target:       "node-1:7946",
+			target:       Peer{udpAddr: "node-1:7946"},
 			wantNone:     true,
 		},
 		"NoCandidatesEmpty": {
-			peers:        []string{},
+			peers:        peers(),
 			nodeID:       "node-0",
 			subgroupSize: 1,
-			target:       "node-1:7946",
+			target:       Peer{udpAddr: "node-1:7946"},
 			wantNone:     true,
 		},
 		"CandidatesLessThanSubgroupSize": {
 			// 2 candidates available but subgroupSize=3: should return both candidates
-			peers:        []string{"node-1:7946", "node-2:7946", "node-3:7946"},
+			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 3,
-			target:       "node-1:7946",
+			target:       Peer{udpAddr: "node-1:7946"},
 			wantCount:    2, // node-2 and node-3; node-1 is the target
 		},
 		"CandidatesEqualSubgroupSize": {
 			// 2 candidates available and subgroupSize=2: should return both candidates
-			peers:        []string{"node-1:7946", "node-2:7946", "node-3:7946"},
+			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 2,
-			target:       "node-1:7946",
+			target:       Peer{udpAddr: "node-1:7946"},
 			wantCount:    2, // node-2 and node-3; node-1 is the target
 		},
 		"CandidatesGreaterThanSubgroupSize": {
 			// 3 candidates available but subgroupSize=2: should return exactly k peers
-			peers:        []string{"node-1:7946", "node-2:7946", "node-3:7946", "node-4:7946"},
+			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946", "node-4:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 2,
-			target:       "node-1:7946",
+			target:       Peer{udpAddr: "node-1:7946"},
 			wantCount:    2,
 		},
 	}
@@ -198,16 +205,15 @@ func TestKRandomPeers(t *testing.T) {
 
 			seen := make(map[string]struct{}, len(got))
 			for _, p := range got {
-				// target and self must never appear in the result
-				assert.False(t, p == tc.target, "target %q must not be selected as intermediary", tc.target)
-				assert.False(t, p == tc.nodeID, "self %q must not be selected as intermediary", tc.nodeID)
+				// target must never appear in the result
+				assert.False(t, p.udpAddr == tc.target.udpAddr, "target %q must not be selected as intermediary", tc.target.udpAddr)
 
 				// all returned peers must be known peers
-				assert.True(t, slices.Contains(tc.peers, p), "selected peer %q is not in the known peer list", p)
+				assert.True(t, slices.ContainsFunc(tc.peers, func(q Peer) bool { return q.udpAddr == p.udpAddr }), "selected peer %q is not in the known peer list", p.udpAddr)
 
-				_, duplicate := seen[p]
-				assert.False(t, duplicate, "peer %q selected more than once", p)
-				seen[p] = struct{}{}
+				_, duplicate := seen[p.udpAddr]
+				assert.False(t, duplicate, "peer %q selected more than once", p.udpAddr)
+				seen[p.udpAddr] = struct{}{}
 			}
 		})
 	}

@@ -38,8 +38,8 @@ type Member struct {
 	resolve    func(ctx context.Context, addr string) (net.Addr, error)
 
 	// muPeers guards peers and deadPeers
-	peers     []string
-	deadPeers map[string]struct{}
+	peers     []Peer
+	deadPeers map[string]struct{} // keyed by UDP addr
 	muPeers   sync.RWMutex
 
 	protocolPeriod      time.Duration
@@ -180,7 +180,7 @@ func New(cfg Config) (*Member, error) {
 		seeds:               slices.Collect(maps.Keys(seeds)),
 		httpClient:          client,
 		resolve:             resolve,
-		peers:               make([]string, 0),
+		peers:               make([]Peer, 0),
 		deadPeers:           make(map[string]struct{}),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
@@ -232,6 +232,19 @@ func (m *Member) Start(ctx context.Context) error {
 	wg.Wait()
 	return nil
 }
+
+// Peer is a SWIM group member. UDPAddr is an unresolved host:port string; DNS is resolved on every
+// send so membership changes propagate without restarting.
+type Peer struct {
+	udpAddr  string
+	httpPort uint16
+}
+
+// UDPAddr returns p's unresolved UDP address (host:port).
+func (p Peer) UDPAddr() string { return p.udpAddr }
+
+// HTTPPort returns p's HTTP port.
+func (p Peer) HTTPPort() uint16 { return p.httpPort }
 
 // Ack is an acknowledgement received from a peer.
 type Ack struct {
@@ -327,7 +340,7 @@ func (m *Member) Listen(ctx context.Context) {
 			go func(acks <-chan Ack, done func()) {
 				defer done()
 
-				target := msg.Target
+				target := Peer{udpAddr: msg.Target}
 				if err := m.send(ctx, target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
 					return
 				}
@@ -339,11 +352,11 @@ func (m *Member) Listen(ctx context.Context) {
 					case <-ackTimeout.C:
 						break waitAck
 					case a := <-acks:
-						if a.Period == msg.Period && a.Addr == target {
+						if a.Period == msg.Period && a.Addr == target.udpAddr {
 							ackTimeout.Stop()
 							// carry the target in the relay ack so the requester can route it and
 							// distinguish from a ping it might have sent to the target itself
-							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, m.Addr(), msg.Period, target))
+							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, m.Addr(), msg.Period, target.udpAddr))
 							break waitAck
 						}
 					}
@@ -420,17 +433,17 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 
 				for _, indirect := range indirects {
-					_ = m.send(ctx, indirect, NewMessage(pingReq, m.Addr(), period, peer))
+					_ = m.send(ctx, indirect, NewMessage(pingReq, m.Addr(), period, peer.udpAddr))
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
-				logger.Info("peer is dead", "peer", peer, "period", period)
-				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: peer}})
+				logger.Info("peer is dead", "peer", peer.udpAddr, "period", period)
+				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: peer.udpAddr}})
 				break waitAck
 			case a := <-m.acks:
-				if a.Period == period && a.Addr == peer {
-					logger.Debug("peer is alive", "peer", peer, "period", period)
+				if a.Period == period && a.Addr == peer.udpAddr {
+					logger.Debug("peer is alive", "peer", peer.udpAddr, "period", period)
 					ackTimeout.Stop()
 					// wait for the period to expire before moving on to the next probe
 					select {
@@ -445,11 +458,11 @@ func (m *Member) Probe(ctx context.Context) {
 	}
 }
 
-func (m *Member) kRandomPeers(target string) ([]string, bool) {
+func (m *Member) kRandomPeers(target Peer) ([]Peer, bool) {
 	m.muPeers.RLock()
-	candidates := make([]string, 0, len(m.peers))
+	candidates := make([]Peer, 0, len(m.peers))
 	for _, p := range m.peers {
-		if p != target {
+		if p.udpAddr != target.udpAddr {
 			candidates = append(candidates, p)
 		}
 	}
@@ -463,27 +476,27 @@ func (m *Member) kRandomPeers(target string) ([]string, bool) {
 		return candidates, true
 	}
 
-	subgroup := make(map[string]struct{}, m.subgroupSize)
+	subgroup := make(map[string]Peer, m.subgroupSize)
 	m.muRng.Lock()
 	for range 3 * len(candidates) {
-		node := candidates[m.rng.IntN(len(candidates))]
-		if _, ok := subgroup[node]; ok {
+		p := candidates[m.rng.IntN(len(candidates))]
+		if _, ok := subgroup[p.udpAddr]; ok {
 			continue
 		}
-		subgroup[node] = struct{}{}
+		subgroup[p.udpAddr] = p
 		if len(subgroup) == m.subgroupSize {
 			break
 		}
 	}
 	m.muRng.Unlock()
-	return slices.Collect(maps.Keys(subgroup)), true
+	return slices.Collect(maps.Values(subgroup)), true
 }
 
 func (m *Member) deletePeer(item EventItem) {
 	var newEvent bool
 	m.muPeers.Lock()
-	m.peers = slices.DeleteFunc(m.peers, func(p string) bool {
-		if p == item.Event.Node {
+	m.peers = slices.DeleteFunc(m.peers, func(p Peer) bool {
+		if p.udpAddr == item.Event.Node {
 			newEvent = true
 			return true
 		}
@@ -504,21 +517,21 @@ func (m *Member) deletePeer(item EventItem) {
 	}
 }
 
-func (m *Member) randomPeer() string {
+func (m *Member) randomPeer() Peer {
 	m.muRng.Lock()
 	i := m.rng.IntN(len(m.peers))
 	m.muRng.Unlock()
 	return m.peers[i]
 }
 
-// send delivers msg to peer by resolving its address and writing the message.
-func (m *Member) send(ctx context.Context, peer string, msg Message) error {
-	addr, err := m.resolve(ctx, peer)
+// send delivers msg to peer by resolving its UDP address and writing the message.
+func (m *Member) send(ctx context.Context, peer Peer, msg Message) error {
+	addr, err := m.resolve(ctx, peer.udpAddr)
 	if err != nil {
-		m.logger.Error("failed to resolve address for peer", "peer", peer, "error", err)
-		return fmt.Errorf("failed to resolve address for peer %q", peer)
+		m.logger.Error("failed to resolve address for peer", "peer", peer.udpAddr, "error", err)
+		return fmt.Errorf("failed to resolve address for peer %q", peer.udpAddr)
 	}
-	return m.sendToAddr(peer, addr, msg)
+	return m.sendToAddr(peer.udpAddr, addr, msg)
 }
 
 // sendToAddr delivers msg to peer and piggybacks pending membership events onto it.
@@ -597,9 +610,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		}
 		logger := m.logger.With("loop", "bootstrap", "wait", waitDuration)
 
-		m.muPeers.Lock()
-		peers := slices.Clone(m.peers)
-		m.muPeers.Unlock()
+		m.muPeers.RLock()
+		peers := make([]string, len(m.peers))
+		for i, p := range m.peers {
+			peers[i] = p.udpAddr
+		}
+		m.muPeers.RUnlock()
 		peers = append(peers, m.Addr())
 		body, err := json.Marshal(joinBody{
 			Peers: peers,
@@ -652,8 +668,13 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			if _, ok := m.deadPeers[p]; ok {
 				continue
 			}
-			if !slices.Contains(m.peers, p) {
-				m.peers = append(m.peers, p)
+			peer := Peer{udpAddr: p}
+			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
+				m.peers = append(m.peers, peer)
+				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
+				if m.notifier != nil {
+					go m.notifier.Notify(p, Alive)
+				}
 				added++
 			}
 		}
@@ -702,11 +723,19 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		if _, ok := m.deadPeers[p]; ok {
 			continue
 		}
-		if !slices.Contains(m.peers, p) {
-			m.peers = append(m.peers, p)
+		peer := Peer{udpAddr: p}
+		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
+			m.peers = append(m.peers, peer)
+			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
+			if m.notifier != nil {
+				go m.notifier.Notify(p, Alive)
+			}
 		}
 	}
-	result := slices.Clone(m.peers)
+	result := make([]string, len(m.peers))
+	for i, p := range m.peers {
+		result[i] = p.udpAddr
+	}
 	result = append(result, m.Addr())
 	m.muPeers.Unlock()
 

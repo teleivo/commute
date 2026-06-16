@@ -84,11 +84,9 @@ func (eq *EventQueue) Push(items ...EventItem) {
 	}
 
 	eq.mu.Lock()
-
 	for _, item := range items {
 		heap.Push(&eq.pq, item)
 	}
-
 	eq.mu.Unlock()
 }
 
