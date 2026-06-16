@@ -400,7 +400,7 @@ func (n *network) registerAdvertiseHost(i int, host string) {
 }
 
 // resolve maps a "node-N:port" peer address to its underlying *net.UDPAddr.
-func (n *network) resolve(addr string) (net.Addr, error) {
+func (n *network) resolve(_ context.Context, addr string) (net.Addr, error) {
 	n.mu.Lock()
 	udpAddr, ok := n.hostToIP[addr]
 	n.mu.Unlock()
