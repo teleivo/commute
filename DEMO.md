@@ -73,17 +73,21 @@ Open Grafana at <http://127.0.0.1:3000/d/commute>. The dashboard auto-refreshes 
 
 ### 3. Send increments
 
-Pick a fresh key for the demo run so the chart starts from zero:
+Start the load generator machine — it discovers all commute nodes via DNS and fires increments at
+each node concurrently:
 
 ```sh
-# Hit all three nodes concurrently
-curl -X POST https://commute.fly.dev/counters/demo2024 -d '{"increment": 1}' &
-curl -X POST https://commute.fly.dev/counters/demo2024 -d '{"increment": 1}' &  # hits a different node via Fly's load balancer
-wait
+./fly-load.sh start
 ```
 
-Or target nodes directly via their internal DNS from within the Fly 6PN mesh (load generator
-machine). Watch the stacked areas grow and converge in Grafana.
+Watch the stacked areas grow in Grafana. Stop writes to show convergence:
+
+```sh
+./fly-load.sh stop
+```
+
+The counter key is `gopher-vs-crab` by default. The load generator re-resolves node addresses every
+10 seconds, so any newly joined demo node is picked up automatically.
 
 ### 4. Show a new node joining (optional)
 

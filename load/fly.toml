@@ -1,0 +1,10 @@
+app = 'commute-load'
+primary_region = 'ams'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

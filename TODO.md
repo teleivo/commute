@@ -1,34 +1,25 @@
 # TODO
 
-* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
-  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+* load generators:
+  * what load can the kv-store handle well?
 
-* test on fly.io
-  * does bootstrap work/swim work/crdt API work like in reade and the gossip of it as well?
-  * test proxy with prom and making requests and seeing ui update locally. tune configs
+* Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
+  pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
+  demo to show a node joining the cluster live.
+
+* ? Add a `demo-node` command to `fly.sh` to start/suspend the pre-created demo nodes by name.
 
 * show divergence across nodes: deploy Prometheus inside the Fly 6PN mesh so it can scrape all
   nodes directly, then proxy only Prometheus (9090:9090) locally — one tunnel, full multi-node
   view, one panel per node in Grafana
 
+* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
+  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+
+* start fresh on fly.io and go through all steps
+  * twice
+
 ## Demo
-
-Show a PN-Counter diverging and converging across a live multi-region cluster on Fly.io. A load
-generator inside Fly hammers all nodes concurrently (low WAN latency from inside the 6PN mesh).
-A local Prometheus + Grafana stack scrapes the Amsterdam node via `fly proxy` and graphs the
-running counter value over time. The audience watches divergence under load and convergence once
-the generator stops.
-
-### What needs to be built
-
-* Load generator: a small program (or shell script with background curls) deployed as a Fly
-  machine inside the 6PN mesh. It sends `POST /counters/<key>` increments to all node HTTP
-  endpoints concurrently. Needs a list of node addresses (same `<id>.vm.commute.internal` pattern)
-  and a configurable rate. Start/stop it via `fly machine start/suspend`.
-* Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
-  pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
-  demo to show a node joining the cluster live.
-* Add a `demo-node` command to `fly.sh` to start/suspend the pre-created demo nodes by name.
 
 ### Demo flow
 
