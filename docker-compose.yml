@@ -52,3 +52,16 @@ services:
       watch:
         - action: rebuild
           path: .
+
+  load:
+    build:
+      context: .
+      dockerfile: load/Dockerfile
+    entrypoint: /bin/load-local.sh
+    environment:
+      COUNTER_KEY: gopher-vs-crab
+      INCREMENT: "1"
+    depends_on:
+      - node-0
+      - node-1
+      - node-2
