@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -129,7 +130,11 @@ func New(cfg Config) (*Server, error) {
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
-		collectors.NewGoCollector(),
+		collectors.NewGoCollector(
+			collectors.WithGoCollectorRuntimeMetrics(
+				collectors.GoRuntimeMetricsRule{Matcher: regexp.MustCompile(`^/sync/mutex/wait/total:seconds`)},
+			),
+		),
 		newStoreCollector(srv.store, cfg.NodeID),
 		httpRequestsTotal,
 		httpRequestDuration,
