@@ -5,16 +5,42 @@
   "version": 1,
   "refresh": "1s",
   "time": { "from": "now-5m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "key",
+        "label": "Key",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(commute_gcounter_node_increments, key)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "sort": 1
+      },
+      {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(commute_gcounter_node_increments{key=\"$key\"}, region)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "hide": 2
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
-      "title": "GCounter increments per node",
+      "title": "GCounter increments per node (scraping $region)",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 12 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "commute_gcounter_node_increments",
+          "expr": "commute_gcounter_node_increments{key=\"$key\"}",
           "legendFormat": "{{node}}",
           "refId": "A"
         }
