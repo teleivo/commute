@@ -53,7 +53,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 		members := joinMembers(t, m, "node-99:7946")
 
 		assert.True(t, slices.Contains(members, "node-99:7946"), "node-99 should be registered as a peer")
-		assert.True(t, slices.Contains(members, m.Addr()), "node-0 should include itself in the response")
+		assert.True(t, slices.Contains(members, m.UDPAddr()), "node-0 should include itself in the response")
 	})
 }
 
@@ -93,7 +93,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 		members := joinMembers(t, m, "node-99:7946")
 
 		assert.True(t, slices.Contains(members, "node-99:7946"), "node-99 should be registered as a peer")
-		assert.True(t, slices.Contains(members, m.Addr()), "node-0 should include itself in the response")
+		assert.True(t, slices.Contains(members, m.UDPAddr()), "node-0 should include itself in the response")
 	})
 }
 

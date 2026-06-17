@@ -264,8 +264,8 @@ type relayKey struct {
 	period uint64
 }
 
-// Addr returns the address this node advertises to SWIM peers (host:port).
-func (m *Member) Addr() string {
+// UDPAddr returns the unresolved UDP host:port this node advertises to SWIM peers.
+func (m *Member) UDPAddr() string {
 	addr := m.conn.LocalAddr().(*net.UDPAddr)
 	return m.advertiseHost + ":" + strconv.Itoa(addr.Port)
 }
@@ -331,7 +331,7 @@ func (m *Member) Listen(ctx context.Context) {
 			default:
 			}
 		case ping:
-			reply := NewMessage(ack, m.Addr(), msg.Period, "")
+			reply := NewMessage(ack, m.UDPAddr(), msg.Period, "")
 			_ = m.sendToAddr(addr.String(), addr, reply)
 		case pingReq:
 			if msg.Target == "" {
@@ -349,7 +349,7 @@ func (m *Member) Listen(ctx context.Context) {
 				defer done()
 
 				target := NewPeer(msg.Target)
-				if err := m.send(ctx, target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
+				if err := m.send(ctx, target, NewMessage(ping, m.UDPAddr(), msg.Period, "")); err != nil {
 					return
 				}
 
@@ -364,7 +364,7 @@ func (m *Member) Listen(ctx context.Context) {
 							ackTimeout.Stop()
 							// carry the target in the relay ack so the requester can route it and
 							// distinguish from a ping it might have sent to the target itself
-							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, m.Addr(), msg.Period, target.udpAddr))
+							_ = m.sendToAddr(addr.String(), addr, NewMessage(ack, m.UDPAddr(), msg.Period, target.udpAddr))
 							break waitAck
 						}
 					}
@@ -424,7 +424,7 @@ func (m *Member) Probe(ctx context.Context) {
 		}
 
 		// direct ping
-		_ = m.send(ctx, peer, NewMessage(ping, m.Addr(), period, ""))
+		_ = m.send(ctx, peer, NewMessage(ping, m.UDPAddr(), period, ""))
 
 		ackTimeout.Reset(m.ackTimeout)
 	waitAck:
@@ -441,7 +441,7 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 
 				for _, indirect := range indirects {
-					_ = m.send(ctx, indirect, NewMessage(pingReq, m.Addr(), period, peer.udpAddr))
+					_ = m.send(ctx, indirect, NewMessage(pingReq, m.UDPAddr(), period, peer.udpAddr))
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
@@ -624,7 +624,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			joinPeers[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 		}
 		m.muPeers.RUnlock()
-		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.Addr(), HTTPPort: m.httpPort()}
+		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.httpPort()}
 		body, err := json.Marshal(joinBody{Peers: joinPeers})
 		if err != nil {
 			panic(err)
@@ -664,7 +664,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		}
 		logger.Info("joined seeds", "seeds", seeds)
 
-		self := m.Addr()
+		self := m.UDPAddr()
 		var added int
 		m.muPeers.Lock()
 		for _, jp := range discovered {
@@ -728,7 +728,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 
 	m.muPeers.Lock()
 	for _, jp := range req.Peers {
-		if jp.UDPAddr == m.Addr() {
+		if jp.UDPAddr == m.UDPAddr() {
 			continue
 		}
 		if _, ok := m.deadPeers[jp.UDPAddr]; ok {
@@ -747,7 +747,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	for i, p := range m.peers {
 		result[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 	}
-	result[len(result)-1] = joinPeer{UDPAddr: m.Addr(), HTTPPort: m.httpPort()}
+	result[len(result)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.httpPort()}
 	m.muPeers.Unlock()
 
 	e := json.NewEncoder(w)
