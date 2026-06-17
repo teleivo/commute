@@ -1,8 +1,15 @@
 # TODO
 
+* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
+  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+
 * test on fly.io
   * does bootstrap work/swim work/crdt API work like in reade and the gossip of it as well?
   * test proxy with prom and making requests and seeing ui update locally. tune configs
+
+* show divergence across nodes: deploy Prometheus inside the Fly 6PN mesh so it can scrape all
+  nodes directly, then proxy only Prometheus (9090:9090) locally — one tunnel, full multi-node
+  view, one panel per node in Grafana
 
 ## Demo
 
