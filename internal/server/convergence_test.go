@@ -510,7 +510,7 @@ func (c *cluster) restart(ctx context.Context, i int) {
 // notifyDead tells node observer that node dead has died, using dead's SWIM UDP address.
 func (c *cluster) notifyDead(observer, dead int) {
 	c.t.Helper()
-	c.nodes[observer].Notify(c.swimAddrs[dead], swim.Dead)
+	c.nodes[observer].Notify(swim.NewPeer(c.swimAddrs[dead]), swim.Dead)
 }
 
 func (c *cluster) increment(node int, key string, value uint64) {

@@ -312,11 +312,11 @@ type recordingNotifier struct {
 	deadPeers []string
 }
 
-func (r *recordingNotifier) Notify(peer string, kind swim.EventKind) {
+func (r *recordingNotifier) Notify(peer swim.Peer, kind swim.EventKind) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if kind == swim.Dead {
-		r.deadPeers = append(r.deadPeers, peer)
+		r.deadPeers = append(r.deadPeers, peer.UDPAddr())
 	}
 }
 
