@@ -29,6 +29,7 @@ import (
 type Member struct {
 	nodeID        string
 	advertiseHost string
+	appPort       uint16
 	conn          net.PacketConn
 	listener      net.Listener
 	server        *http.Server
@@ -60,6 +61,7 @@ type Member struct {
 type Config struct {
 	NodeID        string         // unique node identifier, used for logging
 	AdvertiseHost string         // host advertised to SWIM peers, must match how peers address this node
+	AppPort       uint16         // application port propagated to peers via join exchange; opaque to SWIM
 	Conn          net.PacketConn // UDP connection to receive and send packets on
 	Listener      net.Listener   // TCP listener for the HTTP join endpoint
 
@@ -174,6 +176,7 @@ func New(cfg Config) (*Member, error) {
 	m := &Member{
 		nodeID:              cfg.NodeID,
 		advertiseHost:       cfg.AdvertiseHost,
+		appPort:             cfg.AppPort,
 		conn:                cfg.Conn,
 		listener:            cfg.Listener,
 		server:              &server,
@@ -279,10 +282,6 @@ func (m *Member) UDPAddr() string {
 	return m.advertiseHost + ":" + strconv.Itoa(addr.Port)
 }
 
-// httpPort returns the port the HTTP join listener is bound to.
-func (m *Member) httpPort() uint16 {
-	return uint16(m.listener.Addr().(*net.TCPAddr).Port)
-}
 
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
@@ -633,7 +632,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			joinPeers[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 		}
 		m.muPeers.RUnlock()
-		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.httpPort()}
+		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.appPort}
 		body, err := json.Marshal(joinBody{Peers: joinPeers})
 		if err != nil {
 			panic(err)
@@ -756,7 +755,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	for i, p := range m.peers {
 		result[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 	}
-	result[len(result)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.httpPort()}
+	result[len(result)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.appPort}
 	m.muPeers.Unlock()
 
 	e := json.NewEncoder(w)
