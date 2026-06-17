@@ -270,6 +270,11 @@ func (m *Member) Addr() string {
 	return m.advertiseHost + ":" + strconv.Itoa(addr.Port)
 }
 
+// httpPort returns the port the HTTP join listener is bound to.
+func (m *Member) httpPort() uint16 {
+	return uint16(m.listener.Addr().(*net.TCPAddr).Port)
+}
+
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
 func (m *Member) Listen(ctx context.Context) {
@@ -614,21 +619,19 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		logger := m.logger.With("loop", "bootstrap", "wait", waitDuration)
 
 		m.muPeers.RLock()
-		peers := make([]string, len(m.peers))
+		joinPeers := make([]joinPeer, len(m.peers)+1)
 		for i, p := range m.peers {
-			peers[i] = p.udpAddr
+			joinPeers[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 		}
 		m.muPeers.RUnlock()
-		peers = append(peers, m.Addr())
-		body, err := json.Marshal(joinBody{
-			Peers: peers,
-		})
+		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.Addr(), HTTPPort: m.httpPort()}
+		body, err := json.Marshal(joinBody{Peers: joinPeers})
 		if err != nil {
 			panic(err)
 		}
 
 		var seeds []string
-		var discovered []string
+		var discovered []joinPeer
 		for _, seed := range m.seeds {
 			reqCtx, cancel := context.WithTimeout(ctx, joinTimeout)
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+seed+"/internal/swim/join", bytes.NewReader(body))
@@ -664,17 +667,17 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		self := m.Addr()
 		var added int
 		m.muPeers.Lock()
-		for _, p := range discovered {
-			if p == self {
+		for _, jp := range discovered {
+			if jp.UDPAddr == self {
 				continue
 			}
-			if _, ok := m.deadPeers[p]; ok {
+			if _, ok := m.deadPeers[jp.UDPAddr]; ok {
 				continue
 			}
-			peer := NewPeer(p)
-			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
+			peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
+			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
 				m.peers = append(m.peers, peer)
-				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
+				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
 				if m.notifier != nil {
 					go m.notifier.Notify(peer, Alive)
 				}
@@ -695,7 +698,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 }
 
 type joinBody struct {
-	Peers []string `json:"peers"`
+	Peers []joinPeer `json:"peers"`
+}
+
+type joinPeer struct {
+	UDPAddr  string `json:"udpAddr"`
+	HTTPPort uint16 `json:"httpPort"`
 }
 
 // JoinHandler returns an HTTP handler that accepts POST /internal/swim/join requests. The request
@@ -719,33 +727,31 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.muPeers.Lock()
-	for _, p := range req.Peers {
-		if p == m.Addr() {
+	for _, jp := range req.Peers {
+		if jp.UDPAddr == m.Addr() {
 			continue
 		}
-		if _, ok := m.deadPeers[p]; ok {
+		if _, ok := m.deadPeers[jp.UDPAddr]; ok {
 			continue
 		}
-		peer := NewPeer(p)
-		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
+		peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
+		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
 			m.peers = append(m.peers, peer)
-			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
+			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
 			if m.notifier != nil {
 				go m.notifier.Notify(peer, Alive)
 			}
 		}
 	}
-	result := make([]string, len(m.peers))
+	result := make([]joinPeer, len(m.peers)+1)
 	for i, p := range m.peers {
-		result[i] = p.udpAddr
+		result[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 	}
-	result = append(result, m.Addr())
+	result[len(result)-1] = joinPeer{UDPAddr: m.Addr(), HTTPPort: m.httpPort()}
 	m.muPeers.Unlock()
 
 	e := json.NewEncoder(w)
-	err = e.Encode(joinBody{
-		Peers: result,
-	})
+	err = e.Encode(joinBody{Peers: result})
 	if err != nil {
 		m.logger.Error("failed to encode peers", "error", err)
 	}
