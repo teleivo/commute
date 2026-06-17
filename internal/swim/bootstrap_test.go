@@ -299,22 +299,34 @@ func TestBootstrapDeadPeerNotResurrectedByJoin(t *testing.T) {
 }
 
 // joinMembers calls m.JoinHandler directly with peers as the request body and
-// returns the member list from the response.
+// returns the member UDP addresses from the response.
 func joinMembers(t *testing.T, m *swim.Member, peers ...string) []string {
 	t.Helper()
+	type joinPeer struct {
+		UDPAddr  string `json:"udpAddr"`
+		HTTPPort uint16 `json:"httpPort"`
+	}
+	jps := make([]joinPeer, len(peers))
+	for i, p := range peers {
+		jps[i] = joinPeer{UDPAddr: p}
+	}
 	body, err := json.Marshal(struct {
-		Peers []string `json:"peers"`
-	}{Peers: peers})
+		Peers []joinPeer `json:"peers"`
+	}{Peers: jps})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/internal/swim/join", bytes.NewReader(body))
 	m.JoinHandler(w, r)
 	require.EqualValues(t, 200, w.Code)
 	var resp struct {
-		Peers []string `json:"peers"`
+		Peers []joinPeer `json:"peers"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	return resp.Peers
+	addrs := make([]string, len(resp.Peers))
+	for i, p := range resp.Peers {
+		addrs[i] = p.UDPAddr
+	}
+	return addrs
 }
 
 // joinRoundTripper routes POST /internal/swim/join requests in-process to the
