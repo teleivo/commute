@@ -282,7 +282,6 @@ func (m *Member) UDPAddr() string {
 	return m.advertiseHost + ":" + strconv.Itoa(addr.Port)
 }
 
-
 // Listen reads incoming UDP messages and dispatches them: acks are forwarded to
 // the Probe loop; pings are answered immediately; ping-reqs are relayed to the target.
 func (m *Member) Listen(ctx context.Context) {
@@ -670,7 +669,9 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			discovered = append(discovered, joined.Peers...)
 			seeds = append(seeds, seed)
 		}
-		logger.Info("joined seeds", "seeds", seeds)
+		if len(seeds) > 0 {
+			logger.Info("joined seeds", "seeds", seeds)
+		}
 
 		self := m.UDPAddr()
 		var added int
