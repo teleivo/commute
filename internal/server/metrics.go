@@ -1,10 +1,31 @@
 package server
 
 import (
+	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func httpMetricsMiddleware(next http.Handler, counter *prometheus.CounterVec) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		// r.Pattern is the registered route pattern e.g. "GET /counters/{key}"
+		counter.WithLabelValues(r.Pattern, strconv.Itoa(rec.status)).Inc()
+	})
+}
 
 // storeCollector is a prometheus.Collector that exposes per-node GCounter increments from the
 // store's PNCounters. Metrics are computed at scrape time so no write-path overhead is added.

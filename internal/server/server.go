@@ -115,12 +115,20 @@ func New(cfg Config) (*Server, error) {
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	handler.HandleFunc("POST /internal/ack", srv.postAck)
 
+	httpRequestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "commute_http_requests_total",
+		Help:        "Total HTTP requests by route pattern, status code, and node.",
+		ConstLabels: prometheus.Labels{"node": cfg.NodeID},
+	}, []string{"path", "status"})
+
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		newStoreCollector(srv.store, cfg.NodeID),
+		httpRequestsTotal,
 	)
 	handler.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	server.Handler = httpMetricsMiddleware(handler, httpRequestsTotal)
 
 	return srv, nil
 }
