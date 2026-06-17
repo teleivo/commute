@@ -1,5 +1,8 @@
 # TODO
 
+* test on fly.io
+  * does bootstrap work/swim work/crdt API work like in reade and the gossip of it as well?
+  * test proxy with prom and making requests and seeing ui update locally. tune configs
 * Grafana dashboard: bar chart per node (`commute_gcounter_increments_total` by `node` label) and
   a single-stat total panel (`sum by (key)(commute_gcounter_increments_total)`). Add to
   `docker-compose.metrics.yml` with a provisioned datasource and dashboard JSON.
