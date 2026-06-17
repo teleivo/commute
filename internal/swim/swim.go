@@ -249,6 +249,9 @@ func (p Peer) UDPAddr() string { return p.udpAddr }
 // HTTPPort returns p's HTTP port.
 func (p Peer) HTTPPort() uint16 { return p.httpPort }
 
+// WithHTTPPort returns a copy of p with the given HTTP port set.
+func (p Peer) WithHTTPPort(port uint16) Peer { p.httpPort = port; return p }
+
 // HTTPAddr returns p's unresolved HTTP address (host:port).
 func (p Peer) HTTPAddr() string {
 	host, _, _ := strings.Cut(p.udpAddr, ":")

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -44,7 +43,6 @@ type Config struct {
 	NodeID         string
 	Listener       net.Listener  // listener to accept connections on
 	AdvertiseAddr  string        // address advertised to peers (ip:port); must match how peers address this node
-	Peers          string        // comma-separated list of peer addresses (e.g. host1:7946,host2:7946)
 	GossipInterval time.Duration // how often to push state to a random peer
 	Client         *http.Client  // HTTP client for gossip
 	Rng            *rand.Rand    // random source for peer selection
@@ -62,21 +60,6 @@ func New(cfg Config) (*Server, error) {
 	}
 	if host, port, err := net.SplitHostPort(cfg.AdvertiseAddr); err != nil || host == "" || port == "" {
 		return nil, fmt.Errorf("invalid advertise address %q: must be host:port", cfg.AdvertiseAddr)
-	}
-	if cfg.Peers == "" {
-		return nil, errors.New("at least one peer is required")
-	}
-	peers := make(map[string]struct{})
-	for p := range strings.SplitSeq(cfg.Peers, ",") {
-		p = strings.TrimSpace(p)
-		host, port, err := net.SplitHostPort(p)
-		if err != nil {
-			return nil, fmt.Errorf("invalid peer %q: %s", p, err)
-		}
-		if host == "" || port == "" {
-			return nil, fmt.Errorf("invalid peer %q: host and port are required", p)
-		}
-		peers[p] = struct{}{}
 	}
 	if cfg.GossipInterval <= 0 {
 		return nil, errors.New("gossip interval must be greater than zero")
@@ -116,7 +99,6 @@ func New(cfg Config) (*Server, error) {
 		advertiseAddr:  cfg.AdvertiseAddr,
 		server:         &server,
 		store:          NewStore(crdt.NodeID(cfg.NodeID), clock),
-		peers:          slices.Sorted(maps.Keys(peers)),
 		gossipInterval: cfg.GossipInterval,
 		client:         client,
 		rng:            rng,

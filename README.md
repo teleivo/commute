@@ -106,7 +106,7 @@ curl localhost:8080/sets/fruits
 
 * No persistence: state is in memory. A single node that restarts is rehydrated by gossip, but
   if all nodes are down at once the data is lost.
-* Static initial membership: peers are discovered at startup via a bootstrap loop that contacts
+* Dynamic membership via SWIM: peers are discovered at startup via a bootstrap loop that contacts
   configured seed addresses over HTTP using a push/pull exchange: the joining node sends its current
   peer list so the seed learns new members (push), and the seed returns its own list so the joiner
   can discover indirect peers (pull). Seeds that are unreachable are retried with exponential
