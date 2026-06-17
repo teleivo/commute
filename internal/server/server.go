@@ -118,7 +118,7 @@ func New(cfg Config) (*Server, error) {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
-		newStoreCollector(srv.store),
+		newStoreCollector(srv.store, cfg.NodeID),
 	)
 	handler.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 

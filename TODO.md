@@ -1,11 +1,12 @@
 # TODO
 
-* test on fly.io
-  * does bootstrap work/swim work/crdt API work like in reade and the gossip of it as well?
-  * test proxy with prom and making requests and seeing ui update locally. tune configs
 * Grafana dashboard: bar chart per node (`commute_gcounter_increments_total` by `node` label) and
   a single-stat total panel (`sum by (key)(commute_gcounter_increments_total)`). Add to
   `docker-compose.metrics.yml` with a provisioned datasource and dashboard JSON.
+
+* test on fly.io
+  * does bootstrap work/swim work/crdt API work like in reade and the gossip of it as well?
+  * test proxy with prom and making requests and seeing ui update locally. tune configs
 
 ## Demo
 
@@ -162,7 +163,9 @@ once you stop. Target sum = 0.
 * design a Zombie game backed by the KV store inspired by tigerbeetle ❤️
   * Debug endpoints (pause/resume gossip, inject/heal partitions, state dump, peers)
 
-## Zombie Game
+## Ideas
+
+### Zombie Game
 
 **Inspiration**: TigerBeetle's browser game runs their VOPR simulator (compiled to WASM) and lets
 players inject faults — network partitions, crashes — then watch the cluster recover. The visual
@@ -170,14 +173,14 @@ maps directly to what the DB is doing internally.
 
 **Goal**: Do the same for CRDTs — make gossip and eventual consistency *visible* and *playable*.
 
-### Concept
+#### Concept
 
 A top-down 2D grid where each cell is a KV node (person). One node gets infected with a vial:
 its zombie state propagates to neighbours via gossip. Players can build walls between nodes to
 create network partitions, slowing or blocking propagation. Partitioned zombies cannot infect
 across a wall until it is removed — at which point diverged state merges and the infection spreads.
 
-### Mechanics
+#### Mechanics
 
 * **Nodes (people)**: placed on a grid, each represents a running KV node reachable via HTTP.
 * **Infection**: clicking a node with a vial writes a zombie key via the OR-Set or LWW-Register
@@ -191,7 +194,7 @@ across a wall until it is removed — at which point diverged state merges and t
 * **Win / lose**: the player wins by isolating all zombies behind walls before they infect every
   node; the cluster wins if gossip converges fully before walls are placed.
 
-### CRDTs to use
+#### CRDTs to use
 
 | Concept | CRDT | Reason |
 |---|---|---|
@@ -200,7 +203,7 @@ across a wall until it is removed — at which point diverged state merges and t
 | Vial inventory (how many vials the player holds) | **PN-Counter** | Natural increment/decrement; demonstrates counter semantics |
 | Partition state (which walls are up) | **OR-Set** of `"nodeA-nodeB"` strings | Idempotent add/remove; walls survive concurrent edits |
 
-### What it demonstrates
+#### What it demonstrates
 
 * **Gossip propagation speed**: watch state spread hop by hop.
 * **Network partitions**: walls literally cut gossip paths; diverged state is visible.
@@ -209,7 +212,7 @@ across a wall until it is removed — at which point diverged state merges and t
 * **Delta vs full-state replication**: a toggle can switch modes and the player sees convergence
   speed change (ties into the Prometheus/Grafana metrics goal).
 
-### Implementation sketch
+#### Implementation sketch
 
 * **Game client**: Love2D (Lua) or Go with a simple 2D library; either works over plain HTTP.
 * **API calls**: game reads node state by polling `GET /registers/{key}` and `GET /sets/{key}`;
