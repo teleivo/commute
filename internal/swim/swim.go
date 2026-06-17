@@ -240,6 +240,9 @@ type Peer struct {
 	httpPort uint16
 }
 
+// NewPeer creates a Peer with the given UDP address.
+func NewPeer(udpAddr string) Peer { return Peer{udpAddr: udpAddr} }
+
 // UDPAddr returns p's unresolved UDP address (host:port).
 func (p Peer) UDPAddr() string { return p.udpAddr }
 
@@ -340,7 +343,7 @@ func (m *Member) Listen(ctx context.Context) {
 			go func(acks <-chan Ack, done func()) {
 				defer done()
 
-				target := Peer{udpAddr: msg.Target}
+				target := NewPeer(msg.Target)
 				if err := m.send(ctx, target, NewMessage(ping, m.Addr(), msg.Period, "")); err != nil {
 					return
 				}
@@ -375,7 +378,7 @@ func (m *Member) Listen(ctx context.Context) {
 // goroutine so implementations may block without affecting the probe loop. peer is the SWIM UDP
 // address as given in [Config].Peers (e.g. "node-1:7946"), not any application-layer address.
 type Notifier interface {
-	Notify(peer string, kind EventKind)
+	Notify(peer Peer, kind EventKind)
 }
 
 // Probe runs the failure detection loop: once per protocol period it picks a
@@ -513,7 +516,7 @@ func (m *Member) deletePeer(item EventItem) {
 
 	m.eventQueue.Push(item)
 	if m.notifier != nil {
-		go m.notifier.Notify(item.Event.Node, Dead)
+		go m.notifier.Notify(NewPeer(item.Event.Node), Dead)
 	}
 }
 
@@ -668,12 +671,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			if _, ok := m.deadPeers[p]; ok {
 				continue
 			}
-			peer := Peer{udpAddr: p}
+			peer := NewPeer(p)
 			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
 				m.peers = append(m.peers, peer)
 				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
 				if m.notifier != nil {
-					go m.notifier.Notify(p, Alive)
+					go m.notifier.Notify(peer, Alive)
 				}
 				added++
 			}
@@ -723,12 +726,12 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		if _, ok := m.deadPeers[p]; ok {
 			continue
 		}
-		peer := Peer{udpAddr: p}
+		peer := NewPeer(p)
 		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == p }) {
 			m.peers = append(m.peers, peer)
 			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p}})
 			if m.notifier != nil {
-				go m.notifier.Notify(p, Alive)
+				go m.notifier.Notify(peer, Alive)
 			}
 		}
 	}

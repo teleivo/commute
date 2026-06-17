@@ -131,7 +131,7 @@ func TestKRandomPeers(t *testing.T) {
 	peers := func(addrs ...string) []Peer {
 		ps := make([]Peer, len(addrs))
 		for i, a := range addrs {
-			ps[i] = Peer{udpAddr: a}
+			ps[i] = NewPeer(a)
 		}
 		return ps
 	}
@@ -147,14 +147,14 @@ func TestKRandomPeers(t *testing.T) {
 			peers:        peers("node-1:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 1,
-			target:       Peer{udpAddr: "node-1:7946"},
+			target:       NewPeer("node-1:7946"),
 			wantNone:     true,
 		},
 		"NoCandidatesEmpty": {
 			peers:        peers(),
 			nodeID:       "node-0",
 			subgroupSize: 1,
-			target:       Peer{udpAddr: "node-1:7946"},
+			target:       NewPeer("node-1:7946"),
 			wantNone:     true,
 		},
 		"CandidatesLessThanSubgroupSize": {
@@ -162,7 +162,7 @@ func TestKRandomPeers(t *testing.T) {
 			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 3,
-			target:       Peer{udpAddr: "node-1:7946"},
+			target:       NewPeer("node-1:7946"),
 			wantCount:    2, // node-2 and node-3; node-1 is the target
 		},
 		"CandidatesEqualSubgroupSize": {
@@ -170,7 +170,7 @@ func TestKRandomPeers(t *testing.T) {
 			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 2,
-			target:       Peer{udpAddr: "node-1:7946"},
+			target:       NewPeer("node-1:7946"),
 			wantCount:    2, // node-2 and node-3; node-1 is the target
 		},
 		"CandidatesGreaterThanSubgroupSize": {
@@ -178,7 +178,7 @@ func TestKRandomPeers(t *testing.T) {
 			peers:        peers("node-1:7946", "node-2:7946", "node-3:7946", "node-4:7946"),
 			nodeID:       "node-0",
 			subgroupSize: 2,
-			target:       Peer{udpAddr: "node-1:7946"},
+			target:       NewPeer("node-1:7946"),
 			wantCount:    2,
 		},
 	}
