@@ -104,6 +104,17 @@ func (st *Store) DecrementCounter(key string, value uint64) {
 	st.muCounters.Unlock()
 }
 
+// CounterIncrements returns a snapshot of the per-node increment counters for all keys.
+func (st *Store) CounterIncrements() map[string]map[crdt.NodeID]uint64 {
+	st.muCounters.RLock()
+	defer st.muCounters.RUnlock()
+	out := make(map[string]map[crdt.NodeID]uint64, len(st.counters))
+	for key, pn := range st.counters {
+		out[key] = pn.IncCounters()
+	}
+	return out
+}
+
 // GetCounter returns the value of the counter for key, or false if it doesn't exist.
 func (st *Store) GetCounter(key string) (int64, bool) {
 	st.muCounters.RLock()

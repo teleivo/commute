@@ -71,6 +71,15 @@ func (g *GCounter) Merge(other GCounter) {
 	}
 }
 
+// Counters returns a copy of the per-node counters.
+func (g *GCounter) Counters() map[NodeID]uint64 {
+	out := make(map[NodeID]uint64, len(g.counters))
+	for k, v := range g.counters {
+		out[k] = v
+	}
+	return out
+}
+
 // IsLessOrEqual reports whether g's causal history is subsumed by other's, i.e. g ⊑ other.
 func (g *GCounter) IsLessOrEqual(other GCounter) bool {
 	for id, v := range g.counters {
@@ -144,6 +153,11 @@ func (pn *PNCounter) Decrement(n uint64) PNCounter {
 func (pn *PNCounter) Merge(other *PNCounter) {
 	pn.inc.Merge(other.inc)
 	pn.dec.Merge(other.dec)
+}
+
+// IncCounters returns a copy of the per-node increment counters.
+func (pn *PNCounter) IncCounters() map[NodeID]uint64 {
+	return pn.inc.Counters()
 }
 
 // IsLessOrEqual reports whether pn's causal history is subsumed by other's, i.e. pn ⊑ other.

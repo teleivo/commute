@@ -19,6 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/teleivo/commute/internal/crdt"
 	"github.com/teleivo/commute/internal/swim"
 )
@@ -111,6 +114,14 @@ func New(cfg Config) (*Server, error) {
 	handler.HandleFunc("POST /sets/{key}", srv.postSet)
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	handler.HandleFunc("POST /internal/ack", srv.postAck)
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		newStoreCollector(srv.store),
+	)
+	handler.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+
 	return srv, nil
 }
 

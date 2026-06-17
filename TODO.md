@@ -1,5 +1,8 @@
 # TODO
 
+* Grafana dashboard: bar chart per node (`commute_gcounter_increments_total` by `node` label) and
+  a single-stat total panel (`sum by (key)(commute_gcounter_increments_total)`). Add to
+  `docker-compose.metrics.yml` with a provisioned datasource and dashboard JSON.
 
 ## Demo
 
@@ -11,11 +14,6 @@ the generator stops.
 
 ### What needs to be built
 
-* Expose `/metrics` on each node: PN-Counter current value as a Prometheus gauge (one label per
-  counter key). This is the blocker for everything else in the demo.
-* Local Prometheus config that scrapes `localhost:8080/metrics` (proxied ams node).
-* Grafana dashboard: single time-series panel — counter value on the ams node vs. time. Mark the
-  moment the load generator stops so convergence is visible.
 * Load generator: a small program (or shell script with background curls) deployed as a Fly
   machine inside the 6PN mesh. It sends `POST /counters/<key>` increments to all node HTTP
   endpoints concurrently. Needs a list of node addresses (same `<id>.vm.commute.internal` pattern)
