@@ -33,9 +33,9 @@ const messageVersion uint8 = 1
 type Message struct {
 	Version uint8
 	Kind    messageKind
-	Src     string // address of srce
+	Src     string // unresolved UDP host:port of the sender
 	Period  uint64 // sender's protocol period counter; echoed back in acks
-	Target  string // target peer address; only set in ping-req messages
+	Target  string // unresolved UDP host:port of the probe target; only set in ping-req messages
 	Events  []Event
 }
 

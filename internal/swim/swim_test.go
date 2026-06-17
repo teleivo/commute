@@ -457,7 +457,7 @@ type conn struct {
 	network       *network
 	addr          *net.UDPAddr
 	hostAddr      string      // node-N:port, used for routing and blocking
-	advertiseAddr string      // advertiseHost:port, matches what swim.Member.Addr() returns
+	advertiseAddr string      // advertiseHost:port, matches what swim.Member.UDPAddr() returns
 	ch            chan packet // own receive channel, stored directly for durable blocking under synctest
 	closed        atomic.Bool
 }
