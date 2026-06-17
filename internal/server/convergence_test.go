@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -663,7 +664,6 @@ func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 			NodeID:         fmt.Sprintf("node-%d", i),
 			Listener:       fakeListener{tcpAddr},
 			AdvertiseAddr:  addrs[i],
-			Peers:          strings.Join(peers, ","),
 			GossipInterval: 1 * time.Second,
 			Client:         client,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
@@ -677,6 +677,14 @@ func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 		c.nodes[i] = srv
 		c.routes[addrs[i]] = srv
 		c.configs[i] = cfg
+		for j := range n {
+			if i == j {
+				continue
+			}
+			_, portStr, _ := net.SplitHostPort(addrs[j])
+			port, _ := strconv.ParseUint(portStr, 10, 16)
+			srv.Notify(swim.NewPeer(swimAddrs[j]).WithHTTPPort(uint16(port)), swim.Alive)
+		}
 	}
 
 	return c

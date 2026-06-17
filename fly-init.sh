@@ -6,7 +6,7 @@
 #
 # Required env vars (set via --env on fly machine run/update):
 #   CO_NODE_NAME        this node's name (e.g. node-0); used as node-id for CRDT identity
-#   CO_SEED_IDS         comma-separated seed machine IDs; used to build bootstrap addresses
+#   CO_SEED_IDS         comma-separated seed machine IDs; used to build SWIM bootstrap addresses
 #
 # Injected automatically by Fly.io:
 #   FLY_APP_NAME     app name, used to build <id>.vm.<app>.internal DNS names
@@ -26,12 +26,10 @@ HTTP_PORT="${HTTP_PORT:-8080}"
 SWIM_PORT="${SWIM_PORT:-7946}"
 SWIM_JOIN_PORT="${SWIM_JOIN_PORT:-7947}"
 
-# Build peer lists using machine-ID-based DNS names (<id>.vm.<app>.internal).
-http_peers=""
+# Build swim seed list using machine-ID-based DNS names (<id>.vm.<app>.internal).
 swim_seeds=""
 for id in $(echo "$CO_SEED_IDS" | tr ',' ' '); do
     host="${id}.vm.${FLY_APP_NAME}.internal"
-    http_peers="${http_peers:+${http_peers},}${host}:${HTTP_PORT}"
     swim_seeds="${swim_seeds:+${swim_seeds},}${host}:${SWIM_JOIN_PORT}"
 done
 
@@ -41,7 +39,6 @@ exec /bin/co server \
     --node-id="${CO_NODE_NAME}" \
     --addr=":${HTTP_PORT}" \
     --advertise-addr="${advertise_host}:${HTTP_PORT}" \
-    --peers="${http_peers}" \
     --swim-addr=":${SWIM_PORT}" \
     --swim-join-addr=":${SWIM_JOIN_PORT}" \
     --swim-seeds="${swim_seeds}" \

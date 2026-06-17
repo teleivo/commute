@@ -23,7 +23,6 @@ func TestNew(t *testing.T) {
 		NodeID:         "node-0",
 		Listener:       fakeListener{addr},
 		AdvertiseAddr:  "127.0.0.1:8080",
-		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
 		Logger:         slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
@@ -49,14 +48,6 @@ func TestNew(t *testing.T) {
 		},
 		"AdvertiseAddrMissingPort": {
 			cfg:     func() server.Config { c := validConfig; c.AdvertiseAddr = "127.0.0.1"; return c }(),
-			wantErr: true,
-		},
-		"MissingPeers": {
-			cfg:     func() server.Config { c := validConfig; c.Peers = ""; return c }(),
-			wantErr: true,
-		},
-		"InvalidPeer": {
-			cfg:     func() server.Config { c := validConfig; c.Peers = "notahost"; return c }(),
 			wantErr: true,
 		},
 		"ZeroGossipInterval": {
@@ -557,7 +548,6 @@ func newTestServer(t *testing.T) *server.Server {
 		NodeID:         "test-node",
 		Listener:       fakeListener{addr},
 		AdvertiseAddr:  "127.0.0.1:0",
-		Peers:          "127.0.0.1:9999",
 		GossipInterval: 1 * time.Second,
 		Logger:         slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})

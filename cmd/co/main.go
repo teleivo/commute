@@ -117,10 +117,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		flags.PrintDefaults()
 	}
 	nodeID := flags.String("node-id", "", "unique node identifier (required)")
-	// TODO make clear this is the kv-store related address for API and internal gossip
-	addr := flags.String("addr", ":0", "listen address (e.g. :8080, 0.0.0.0:8080)")
-	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port); must match exactly how this node appears in each peer's --peers list")
-	peers := flags.String("peers", "", "comma-separated list of peer HTTP addresses (e.g. host1:8080,host2:8080)")
+	addr := flags.String("addr", ":0", "HTTP listen address for the API and gossip endpoint (e.g. :8080)")
+	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port)")
 	gossipInterval := flags.Duration("gossip-interval", 5*time.Second, "how often to push state to a random peer")
 
 	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
@@ -182,7 +180,6 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 			NodeID:         *nodeID,
 			Listener:       ln,
 			AdvertiseAddr:  *advertiseAddr,
-			Peers:          *peers,
 			GossipInterval: *gossipInterval,
 			Logger:         logger,
 		})

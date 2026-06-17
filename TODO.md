@@ -1,21 +1,5 @@
 # TODO
 
-* Notify server of new peers via Alive event on join/bootstrap so `srv.peers` is populated
-  dynamically and `--peers` flag can be removed. No incarnation numbers needed yet — conflicts
-  between Alive/Suspect/Confirm only matter once Suspicion is implemented (SWIM §4.2).
-  The challenge: `Notify` receives the SWIM UDP peer address (`host:udpPort`) but `srv.peers`
-  needs the HTTP address (`host:httpPort`). The HTTP port is not fixed — `--addr` defaults to
-  `:0` (OS-assigned), so ports differ per node and a homogeneous-port assumption is wrong.
-  Two approaches:
-  * Add `HTTPPort uint16` to `Event`. The node knows its own HTTP port from `--advertise-addr`
-    at startup and embeds it in every `Alive` event it originates. `Notify(Alive)` receives
-    the SWIM UDP addr plus HTTP port and reconstructs the full HTTP peer address. Requires a
-    wire format change to `Event` (2 extra bytes, version bump) but keeps `Node` clearly as a
-    SWIM UDP addr and makes the HTTP port explicit. This is the right approach.
-  * Run everything on one port (TCP only, no UDP). Corrosion/foca do this via QUIC. Requires
-    replacing the UDP PacketConn with a TCP/QUIC listener for SWIM probing — a full redesign.
-    UDP and TCP can share the same port *number* (separate OS namespaces) but not the same
-    socket, so "one port" really means switching transports, not multiplexing.
 
 ## Demo
 
@@ -53,10 +37,10 @@ the generator stops.
 
 ## SWIM
 
+* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
+
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
-
-* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
 * suspicion
 
