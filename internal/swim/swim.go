@@ -249,6 +249,12 @@ func (p Peer) UDPAddr() string { return p.udpAddr }
 // HTTPPort returns p's HTTP port.
 func (p Peer) HTTPPort() uint16 { return p.httpPort }
 
+// HTTPAddr returns p's unresolved HTTP address (host:port).
+func (p Peer) HTTPAddr() string {
+	host, _, _ := strings.Cut(p.udpAddr, ":")
+	return host + ":" + strconv.FormatUint(uint64(p.httpPort), 10)
+}
+
 // Ack is an acknowledgement received from a peer.
 type Ack struct {
 	Period uint64
