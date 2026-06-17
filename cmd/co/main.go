@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
@@ -151,9 +152,13 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if *advertiseAddr == "" {
 		return 2, errors.New("advertise-addr is required")
 	}
-	advertiseHost, _, err := net.SplitHostPort(*advertiseAddr)
+	advertiseHost, advertisePortStr, err := net.SplitHostPort(*advertiseAddr)
 	if err != nil {
 		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
+	}
+	advertisePort, err := strconv.ParseUint(advertisePortStr, 10, 16)
+	if err != nil {
+		return 2, fmt.Errorf("invalid port in advertise-addr %q: %s", *advertiseAddr, err)
 	}
 	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
 		return 2, fmt.Errorf("invalid swim-addr %q: %s", *swimAddr, err)
@@ -197,6 +202,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		member, err := swim.New(swim.Config{
 			NodeID:              *nodeID,
 			AdvertiseHost:       advertiseHost,
+			AppPort:             uint16(advertisePort),
 			Conn:                swimConn,
 			Listener:            lnSwim,
 			Seeds:               *swimSeeds,

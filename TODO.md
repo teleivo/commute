@@ -37,6 +37,12 @@ the generator stops.
 
 ## SWIM
 
+* Rethink ports and the swim/server relationship. Currently `AppPort` in `swim.Config` leaks an
+  application-layer concern (the HTTP API port) into the SWIM layer. Consul/memberlist solve this
+  cleanly via an opaque `Meta []byte` blob that the application embeds in every membership message
+  and decodes itself — SWIM propagates it without interpreting it. Consider replacing `AppPort`
+  with a `Meta []byte` field on `Config` and `Peer` so the SWIM layer stays protocol-agnostic.
+
 * 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
