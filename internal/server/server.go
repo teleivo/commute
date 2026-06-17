@@ -577,21 +577,19 @@ func (srv *Server) parseNodeAddr(r *http.Request) (string, error) {
 
 // Notify implements [swim.Notifier].
 func (srv *Server) Notify(peer swim.Peer, kind swim.EventKind) {
-	udpAddr := peer.UDPAddr()
+	httpAddr := peer.HTTPAddr()
 	switch kind {
 	case swim.Alive:
-	// TODO wire peer.HTTPPort() to derive http addr and add to srv.peers
-	case swim.Dead:
-		host, _, ok := strings.Cut(udpAddr, ":")
-		if !ok {
-			srv.logger.Error("Notify called with peer missing port", "peer", udpAddr)
-			return
-		}
-		host += ":"
-
 		srv.peersMu.Lock()
-		srv.peers = slices.DeleteFunc(srv.peers, func(peer string) bool {
-			return strings.HasPrefix(peer, host)
+		if !slices.Contains(srv.peers, httpAddr) {
+			srv.peers = append(srv.peers, httpAddr)
+		}
+		srv.peersMu.Unlock()
+	case swim.Dead:
+		host, _, _ := strings.Cut(peer.UDPAddr(), ":")
+		srv.peersMu.Lock()
+		srv.peers = slices.DeleteFunc(srv.peers, func(p string) bool {
+			return strings.HasPrefix(p, host+":")
 		})
 		srv.peersMu.Unlock()
 	}
