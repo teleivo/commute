@@ -90,7 +90,7 @@ create_machine_if_missing() {
     id=$(machine_id "${name}")
     if [ -z "${id}" ]; then
         echo "${name}: creating in ${region}"
-        fly machine run "${new_image}" --app "${APP}" --name "${name}" --region "${region}" \
+        fly machine create "${new_image}" --app "${APP}" --name "${name}" --region "${region}" \
             --env CO_NODE_NAME="${name}" \
             --env CO_COMMIT="${commit}"
     fi

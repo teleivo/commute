@@ -57,15 +57,16 @@ The three base nodes are:
 In a separate terminal, proxy the Amsterdam node so Prometheus can scrape it:
 
 ```sh
-fly proxy 8080:8080 --app commute --select
+fly proxy 8080:8080 --app commute --bind-addr 0.0.0.0 --select
 ```
 
-Select `node-0` (ams) when prompted.
+Select `node-0` (ams) when prompted. `--bind-addr 0.0.0.0` is required so the Prometheus container
+can reach the proxy via the Docker bridge network.
 
 Then start Prometheus and Grafana:
 
 ```sh
-docker compose -f docker-compose.metrics.yml up
+docker compose -f docker-compose.metrics.yml -f docker-compose.metrics.fly.yml up
 ```
 
 Open Grafana at <http://127.0.0.1:3000/d/commute>. The dashboard auto-refreshes every 1s.
@@ -99,7 +100,7 @@ stacked chart as gossip delivers the counter state to the new node.
 
 ```sh
 ./fly.sh pause
-docker compose -f docker-compose.metrics.yml down
+docker compose -f docker-compose.metrics.yml -f docker-compose.metrics.fly.yml down
 ```
 
 ## Local testing (no Fly.io)

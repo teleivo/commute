@@ -1,0 +1,6 @@
+services:
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus.fly.yml:/etc/prometheus/prometheus.yml:ro
