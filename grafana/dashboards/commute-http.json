@@ -5,6 +5,23 @@
   "version": 1,
   "refresh": "1s",
   "time": { "from": "now-5m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(commute_http_requests_total, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
@@ -14,7 +31,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum by (path, status) (rate(commute_http_requests_total[1m]))",
+          "expr": "sum by (path, status) (rate(commute_http_requests_total{instance=~\"$instance\"}[1m]))",
           "legendFormat": "{{path}} · {{status}}",
           "refId": "A"
         }
@@ -44,17 +61,17 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
           "legendFormat": "p99",
           "refId": "C"
         }

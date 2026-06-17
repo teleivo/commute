@@ -61,6 +61,8 @@ services:
     environment:
       COUNTER_KEY: gopher-vs-crab
       INCREMENT: "1"
+      RATE: 1500/s
+      REPORT_EVERY: 10s
     depends_on:
       - node-0
       - node-1
