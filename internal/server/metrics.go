@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -18,12 +19,15 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-func httpMetricsMiddleware(next http.Handler, counter *prometheus.CounterVec) http.Handler {
+func httpMetricsMiddleware(next http.Handler, counter *prometheus.CounterVec, duration *prometheus.HistogramVec) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		// r.Pattern is the registered route pattern e.g. "GET /counters/{key}"
-		counter.WithLabelValues(r.Pattern, strconv.Itoa(rec.status)).Inc()
+		status := strconv.Itoa(rec.status)
+		counter.WithLabelValues(r.Pattern, status).Inc()
+		duration.WithLabelValues(r.Pattern, status).Observe(time.Since(start).Seconds())
 	})
 }
 

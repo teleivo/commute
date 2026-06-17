@@ -120,15 +120,22 @@ func New(cfg Config) (*Server, error) {
 		Help:        "Total HTTP requests by route pattern, status code, and node.",
 		ConstLabels: prometheus.Labels{"node": cfg.NodeID},
 	}, []string{"path", "status"})
+	httpRequestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:        "commute_http_request_duration_seconds",
+		Help:        "HTTP request latency by route pattern, status code, and node.",
+		ConstLabels: prometheus.Labels{"node": cfg.NodeID},
+		Buckets: []float64{.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1},
+	}, []string{"path", "status"})
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		newStoreCollector(srv.store, cfg.NodeID),
 		httpRequestsTotal,
+		httpRequestDuration,
 	)
 	handler.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-	server.Handler = httpMetricsMiddleware(handler, httpRequestsTotal)
+	server.Handler = httpMetricsMiddleware(handler, httpRequestsTotal, httpRequestDuration)
 
 	return srv, nil
 }
