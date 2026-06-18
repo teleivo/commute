@@ -736,6 +736,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.muPeers.Lock()
+	var added []string
 	for _, jp := range req.Peers {
 		if jp.UDPAddr == m.UDPAddr() {
 			continue
