@@ -62,6 +62,7 @@ resolve_nodes() {
 }
 
 last_resolve=0
+last_nodes=""
 vegeta_pid=""
 
 while true; do
@@ -70,28 +71,34 @@ while true; do
         nodes=$(resolve_nodes)
         last_resolve="${now}"
         count=$(echo "${nodes}" | grep -c '.' || true)
-        echo "load: resolved ${count} node(s) in regions=${REGIONS}"
 
-        if [ -n "${vegeta_pid}" ]; then
-            kill "${vegeta_pid}" 2>/dev/null || true
-            vegeta_pid=""
-        fi
+        if [ "${nodes}" != "${last_nodes}" ]; then
+            echo "load: resolved ${count} node(s) in regions=${REGIONS} (changed, restarting vegeta)"
+            last_nodes="${nodes}"
 
-        if [ -z "${nodes}" ]; then
-            echo "load: no nodes found for regions=${REGIONS}, will retry" >&2
+            if [ -n "${vegeta_pid}" ]; then
+                kill "${vegeta_pid}" 2>/dev/null || true
+                vegeta_pid=""
+            fi
+
+            if [ -z "${nodes}" ]; then
+                echo "load: no nodes found for regions=${REGIONS}, will retry" >&2
+            else
+                for node in ${nodes}; do
+                    printf 'POST http://%s/counters/%s\nContent-Type: application/json\n@%s\n\n' \
+                        "${node}" "${COUNTER_KEY}" "${body}"
+                done > "${targets}"
+
+                vegeta attack \
+                    --targets="${targets}" \
+                    --rate="${RATE}" \
+                    --duration=0 \
+                    --prometheus-addr="${PROMETHEUS_ADDR}" \
+                    | vegeta report --every="${REPORT_EVERY}" &
+                vegeta_pid=$!
+            fi
         else
-            for node in ${nodes}; do
-                printf 'POST http://%s/counters/%s\nContent-Type: application/json\n@%s\n\n' \
-                    "${node}" "${COUNTER_KEY}" "${body}"
-            done > "${targets}"
-
-            vegeta attack \
-                --targets="${targets}" \
-                --rate="${RATE}" \
-                --duration=0 \
-                --prometheus-addr="${PROMETHEUS_ADDR}" \
-                | vegeta report --every="${REPORT_EVERY}" &
-            vegeta_pid=$!
+            echo "load: resolved ${count} node(s) in regions=${REGIONS} (unchanged)"
         fi
     fi
     sleep 1

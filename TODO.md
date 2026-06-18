@@ -7,13 +7,13 @@
   * add more load generators
 
 * deploy fully
-* try hitting 1 billion
+  * what rate should I settle on?
+
 * fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
   Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
 
-* what load can the kv-store handle well?
-  * on fly
-  * locally: at least 24000/s with 3 nodes
+* local rate: at least 24000/s with 3 nodes
+   * try getting to 1 billion locally
 
 * finish slides
 

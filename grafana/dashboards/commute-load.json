@@ -19,6 +19,38 @@
         "includeAll": false,
         "multi": false,
         "sort": 0
+      },
+      {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(request_seconds_count, region)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {},
+        "sort": 1
+      },
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(request_seconds_count{region=~\"$region\"}, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {},
+        "sort": 1
       }
     ]
   },
@@ -39,7 +71,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(request_seconds_count[1m]))",
+          "expr": "sum(rate(request_seconds_count{region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "requests/s",
           "refId": "A"
         }
@@ -84,17 +116,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(request_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(request_seconds_bucket{region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(request_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(request_seconds_bucket{region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(request_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(request_seconds_bucket{region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "p99",
           "refId": "C"
         }
