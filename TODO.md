@@ -19,17 +19,13 @@
 * **Alive events not implemented**: when a node is declared dead and rejoins via bootstrap, only
   the seeds it contacts re-admit it. The rest of the cluster never learns it is back (alive events
   are not yet disseminated). The rejoining node gets `gossip rejected` 400s from all non-seed
-  peers indefinitely until alive events are implemented (see SWIM section).
-
-* **IdleTimeout vs vegeta connection pool**: vegeta opens a large idle connection pool (default
-  10000 per host) and at 350/s most connections sit idle. A low IdleTimeout culls them causing
-  periodic reconnect bursts; 120s avoids this. The tradeoff: after stopping load generators,
-  wait >120s before redeploying to let the server clear half-open connections cleanly.
+  peers indefinitely. See SWIM section for the full fix.
 
 * **Connection storm on vegeta restart**: when the node list changes, vegeta is killed and
-  restarted, opening all connections simultaneously. The `line()` rate-ramp scheduler is not
-  exposed in the vegeta 12.13.0 CLI. Workaround: stop load generators, wait >IdleTimeout for
-  the server to clear connections, then redeploy.
+  immediately restarted, opening all connections at once. The server still holds the old
+  connections until `IdleTimeout` (120s) expires, so the new connections get reset. The `line()`
+  rate-ramp scheduler that would soften this is not exposed in the vegeta 12.13.0 CLI.
+  Workaround: stop load generators, wait >120s, then redeploy.
 
 ### Demo flow
 
