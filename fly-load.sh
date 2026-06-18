@@ -9,6 +9,7 @@
 #   start             start all stopped load generator machines
 #   stop              stop all running load generator machines
 #   status            list all load generator machines with their current state
+#   destroy           destroy all load generator machines (full cleanup, asks for confirmation)
 
 set -eu
 
@@ -154,11 +155,30 @@ cmd_status() {
         | column --table --table-columns NAME,STATE,REGION,REGIONS
 }
 
+cmd_destroy() {
+    ids=$(machines_json | jq --raw-output '.[].id')
+    if [ -z "${ids}" ]; then
+        echo "no machines found"
+        return
+    fi
+    printf "destroy all machines in app %s? [y/N] " "${LOAD_APP}"
+    read -r confirm
+    if [ "${confirm}" != "y" ] && [ "${confirm}" != "Y" ]; then
+        echo "aborted"
+        return
+    fi
+    for id in ${ids}; do
+        echo "destroying ${id}"
+        fly machine destroy "${id}" --app "${LOAD_APP}" --force
+    done
+}
+
 case "${1:-}" in
-    deploy) cmd_deploy "${2:-}" ;;
-    start)  cmd_start ;;
-    stop)   cmd_stop ;;
-    status) cmd_status ;;
+    deploy)  cmd_deploy "${2:-}" ;;
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    status)  cmd_status ;;
+    destroy) cmd_destroy ;;
     *)
         cat >&2 <<'EOF'
 usage: ./fly-load.sh <command>
@@ -169,6 +189,7 @@ commands:
   start             start all stopped load generator machines
   stop              stop all running load generator machines
   status            list all load generator machines with their current state
+  destroy           destroy all load generator machines (full cleanup, asks for confirmation)
 EOF
         exit 1
         ;;

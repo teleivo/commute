@@ -8,7 +8,9 @@
 #                     --all deploys all 16 regions; default deploys only the 3 core nodes (ams, fra, lhr)
 #   start             start all stopped machines
 #   stop              stop all running machines
+#   pause             suspend all machines (faster resume than stop)
 #   status            list all machines with their current state
+#   destroy           destroy all machines (full cleanup)
 
 set -eu
 
@@ -190,12 +192,31 @@ cmd_status() {
         | column --table --table-columns NAME,STATE,REGION,CO_COMMIT
 }
 
+cmd_destroy() {
+    ids=$(all_machine_ids)
+    if [ -z "${ids}" ]; then
+        echo "no machines found"
+        return
+    fi
+    printf "destroy all machines in app %s? [y/N] " "${APP}"
+    read -r confirm
+    if [ "${confirm}" != "y" ] && [ "${confirm}" != "Y" ]; then
+        echo "aborted"
+        return
+    fi
+    for id in ${ids}; do
+        echo "destroying ${id}"
+        fly machine destroy "${id}" --app "${APP}" --force
+    done
+}
+
 case "${1:-}" in
-    deploy) cmd_deploy "${2:-}" ;;
-    start)  cmd_start ;;
-    stop)   cmd_stop ;;
-    pause)  cmd_pause ;;
-    status) cmd_status ;;
+    deploy)  cmd_deploy "${2:-}" ;;
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    pause)   cmd_pause ;;
+    status)  cmd_status ;;
+    destroy) cmd_destroy ;;
     *)
         cat >&2 <<'EOF'
 usage: ./fly.sh <command>
@@ -207,6 +228,7 @@ commands:
   stop              stop all running machines
   pause             suspend all machines (faster resume than stop)
   status            list all machines with their current state
+  destroy           destroy all machines (full cleanup)
 EOF
         exit 1
         ;;
