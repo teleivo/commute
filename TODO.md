@@ -1,10 +1,5 @@
 # TODO
 
-* deploy in another continent app+load
-  * add more regions (other continents)
-  * add more load generators
-  * what rate should I settle on?
-
 * finish slides
 
 * start fresh on fly.io and go through all steps
