@@ -83,8 +83,7 @@ func New(cfg Config) (*Server, error) {
 	server := http.Server{
 		Handler:     handler,
 		ReadTimeout: 3 * time.Second,
-		// TODO: raise IdleTimeout back to 120s; lowered for demo to reduce half-open connections after vegeta restarts.
-		IdleTimeout: 10 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 	client := cfg.Client
 	if client == nil {
