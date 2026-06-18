@@ -13,6 +13,27 @@
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
+* suspicion and the issue below
+* cold-start bug: on startup, a peer added via `JoinHandler` (another node's bootstrap contacting
+  us) can be declared dead before it is ever successfully probed. The sequence on Fly.io:
+  * node-1/node-2 boot and their bootstrap loop immediately contacts node-0's `JoinHandler` via
+    TCP (7947). node-0 adds them to `m.peers` and the probe loop starts.
+  * The probe loop tries to UDP-ping the new peers. Fly's internal DNS propagation lags — a newly
+    started machine is reachable via its IPv6 address before its `.vm.app.internal` hostname is
+    registered. node-0 can't resolve node-1/node-2 yet (asymmetric: they could reach node-0 which
+    was already running, but node-0 can't resolve them yet).
+  * `send` fails with a DNS error. The protocol period expires with no ack, and the peer is moved
+    to `deadPeers`. Subsequent bootstrap joins discover them again but skip them because they are
+    in `deadPeers`.
+  * Memberlist and foca both avoid this via suspicion: a failed direct ping triggers indirect
+    probes first, and only then moves the peer to Suspect (not Dead) with a configurable timeout.
+    Foca goes further: send errors are silently swallowed at the transport layer and never fed back
+    into failure detection — only the absence of an ack after the full probe period (direct +
+    indirect) moves a peer to Suspect.
+  * Fix: implement suspicion (Suspect state + timeout before Dead). Short-term: don't feed `send`
+    errors back into failure detection — if `send` fails, skip the ack-wait and let bootstrap
+    retry rather than declaring the peer dead.
+
 * Alive events: two halves of the same feature, both needed together. Not needed for the demo
   since the bootstrap loop already handles peer discovery with a 1s retry interval.
   * Emit: `JoinHandler` should push an Alive event onto the queue so it gets piggybacked on
@@ -121,6 +142,7 @@ once you stop. Target sum = 0.
 ## Later
 
 * HTTP layer hardening
+  * add logger middleware
   * return more detailed errors? revisit my error handling in general
   * `http.MaxBytesReader` on every handler that calls `io.ReadAll(r.Body)` (incl. `postSet`,
     where `contexts` can be arbitrarily large)
