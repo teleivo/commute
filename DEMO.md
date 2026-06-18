@@ -1,7 +1,7 @@
 # Demo
 
 Show a PNCounter diverging and converging across a live multi-region cluster on Fly.io. Nodes
-across up to 17 regions each accept increments independently. Fly.io's managed Prometheus scrapes
+across up to 16 regions each accept increments independently. Fly.io's managed Prometheus scrapes
 all nodes automatically and Grafana at fly-metrics.net graphs the per-node GCounter slots as a
 stacked area chart — the stack height is the true total. The audience watches the areas shift as
 gossip propagates increments across regions, then stabilize once writes stop.
@@ -51,7 +51,7 @@ The three core nodes are:
 | node-1 | fra    | Frankfurt, Germany     |
 | node-2 | lhr    | London, United Kingdom |
 
-With `./fly.sh deploy --all`, 14 additional nodes are deployed:
+With `./fly.sh deploy --all`, 13 additional nodes are deployed:
 
 | Name    | Region | Location                     |
 |---------|--------|------------------------------|
@@ -66,9 +66,8 @@ With `./fly.sh deploy --all`, 14 additional nodes are deployed:
 | node-11 | ewr    | Secaucus, NJ (US)            |
 | node-12 | sin    | Singapore                    |
 | node-13 | arn    | Stockholm, Sweden            |
-| node-14 | syd    | Sydney, Australia            |
-| node-15 | nrt    | Tokyo, Japan                 |
-| node-16 | yyz    | Toronto, Canada              |
+| node-14 | nrt    | Tokyo, Japan                 |
+| node-15 | yyz    | Toronto, Canada              |
 
 ### 2. Start the load generator
 
