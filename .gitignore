@@ -33,3 +33,4 @@ _research/
 *.log
 scratch*.dot
 .claude/
+.env

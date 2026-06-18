@@ -7,3 +7,13 @@ datasources:
     uid: prometheus
     url: http://prometheus:9090
     isDefault: true
+
+  - name: Prometheus (Fly)
+    type: prometheus
+    access: proxy
+    uid: prometheus-fly
+    url: https://api.fly.io/prometheus/personal
+    jsonData:
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: ${FLY_METRICS_TOKEN}
