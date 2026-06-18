@@ -16,4 +16,4 @@ datasources:
     jsonData:
       httpHeaderName1: Authorization
     secureJsonData:
-      httpHeaderValue1: ${FLY_METRICS_TOKEN}
+      httpHeaderValue1: $FLY_METRICS_TOKEN

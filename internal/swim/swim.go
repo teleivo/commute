@@ -431,7 +431,19 @@ func (m *Member) Probe(ctx context.Context) {
 		}
 
 		// direct ping
-		_ = m.send(ctx, peer, NewMessage(ping, m.UDPAddr(), period, ""))
+		// TODO: send errors (currently only DNS resolution failures) are not fed into failure
+		// detection. If send fails the peer stays alive and bootstrap retries until DNS
+		// stabilises. The consequence is that a peer whose DNS stops resolving permanently is
+		// never declared dead. Suspicion will fix this properly: a failed send will move the
+		// peer to Suspect with a timeout, allowing refutation before declaring it dead.
+		if err := m.send(ctx, peer, NewMessage(ping, m.UDPAddr(), period, "")); err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-periodTimer.C:
+			}
+			continue
+		}
 
 		ackTimeout.Reset(m.ackTimeout)
 	waitAck:
@@ -751,7 +763,11 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 			if m.notifier != nil {
 				go m.notifier.Notify(peer, Alive)
 			}
+			added = append(added, jp.UDPAddr)
 		}
+	}
+	if len(added) > 0 {
+		m.logger.Info("added peers", "handler", "join", "peers_added", len(added))
 	}
 	result := make([]joinPeer, len(m.peers)+1)
 	for i, p := range m.peers {

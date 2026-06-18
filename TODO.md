@@ -1,26 +1,29 @@
 # TODO
 
 * wire up metrics on fly.io managed prometheus/grafana
-  * do I then need to adapt my local setup?
+  * allo selecting datasource in my dashboards
   * try the entire workflow on fly with a reasonable rate
     * add more regions (other continents)
     * add more load generators
     * get familiar with grafana/fly
 
+* test all still works on fly
+  * deploy in another continent app+load
+  * deploy fully
+  * what load can the kv-store handle well?
+  * fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
+    Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+
 * what load can the kv-store handle well?
-  * locally
   * on fly
+  * locally: at least 24000/s with 3 nodes
 
-* Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
-  pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
-  demo to show a node joining the cluster live.
-
-* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
-  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+* finish slides
 
 * start fresh on fly.io and go through all steps
   * document
   * twice
+  * go through slides again
 
 nice to have
 * let a new node join?
@@ -33,12 +36,12 @@ nice to have
 ### Demo flow
 
 1. `./fly.sh start` — wake the 3 base nodes
-2. `fly machine start <demo-node>` — show a new region joining (bootstrap loop, SWIM membership)
-3. `fly proxy 8080:8080 --app commute --select` — proxy ams node for Prometheus scrape
-4. Open Grafana, start load generator machine
-5. Watch counter on ams diverge from the true total as gossip lags
-6. Stop load generator — watch convergence on the Grafana panel
-7. `./fly.sh pause` + suspend demo node when done
+2. `./fly-load.sh start` — start load generator
+3. Open Grafana at fly-metrics.net
+4. `fly machine start <demo-node>` — show a new region joining (bootstrap loop, SWIM membership)
+5. Watch counter diverge across nodes as gossip lags
+6. `./fly-load.sh stop` — stop load, watch convergence on the Grafana panel
+7. `./fly.sh pause` + `fly machine suspend <demo-node>` when done
 
 ## SWIM
 
@@ -53,7 +56,27 @@ nice to have
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
-* suspicion
+* suspicion and the issue below
+* cold-start bug: on startup, a peer added via `JoinHandler` (another node's bootstrap contacting
+  us) can be declared dead before it is ever successfully probed. The sequence on Fly.io:
+  * node-1/node-2 boot and their bootstrap loop immediately contacts node-0's `JoinHandler` via
+    TCP (7947). node-0 adds them to `m.peers` and the probe loop starts.
+  * The probe loop tries to UDP-ping the new peers. Fly's internal DNS propagation lags — a newly
+    started machine is reachable via its IPv6 address before its `.vm.app.internal` hostname is
+    registered. node-0 can't resolve node-1/node-2 yet (asymmetric: they could reach node-0 which
+    was already running, but node-0 can't resolve them yet).
+  * `send` fails with a DNS error. The protocol period expires with no ack, and the peer is moved
+    to `deadPeers`. Subsequent bootstrap joins discover them again but skip them because they are
+    in `deadPeers`.
+  * Memberlist and foca both avoid this via suspicion: a failed direct ping triggers indirect
+    probes first, and only then moves the peer to Suspect (not Dead) with a configurable timeout.
+    Foca goes further: send errors are silently swallowed at the transport layer and never fed back
+    into failure detection — only the absence of an ack after the full probe period (direct +
+    indirect) moves a peer to Suspect.
+  * Fix: implement suspicion (Suspect state + timeout before Dead). Short-term: don't feed `send`
+    errors back into failure detection — if `send` fails, skip the ack-wait and let bootstrap
+    retry rather than declaring the peer dead.
+
 
 * Alive events: two halves of the same feature, both needed together. Not needed for the demo
   since the bootstrap loop already handles peer discovery with a 1s retry interval.
@@ -151,6 +174,7 @@ once you stop. Target sum = 0.
 ## Later
 
 * HTTP layer hardening
+  * add logger middleware
   * return more detailed errors? revisit my error handling in general
   * `http.MaxBytesReader` on every handler that calls `io.ReadAll(r.Body)` (incl. `postSet`,
     where `contexts` can be arbitrarily large)
