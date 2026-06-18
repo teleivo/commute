@@ -4,10 +4,11 @@
 # Usage: ./fly-load.sh <command>
 #
 # Commands:
-#   deploy    build image and create or update load generator machines, then start them
-#   start     start all stopped load generator machines
-#   stop      stop all running load generator machines
-#   status    list all load generator machines with their current state
+#   deploy [--all]    build image and create or update load generator machines, then start them
+#                     --all deploys all 8 generators; default deploys only gen-europe-west (ams)
+#   start             start all stopped load generator machines
+#   stop              stop all running load generator machines
+#   status            list all load generator machines with their current state
 
 set -eu
 
@@ -20,7 +21,10 @@ RATE="${RATE:-200/s}"
 
 # One load generator per region group, each targeting nearby commute nodes.
 # Name maps to: region, owned REGIONS list (max 3 nodes each)
-GENERATORS="
+CORE_GENERATORS="
+gen-europe-west  ams  ams,fra,lhr
+"
+ALL_GENERATORS="
 gen-europe-west  ams  ams,fra,lhr
 gen-europe-east  cdg  cdg,arn
 gen-us-east      iad  iad,ewr,yyz
@@ -72,6 +76,11 @@ build_image() {
 }
 
 cmd_deploy() {
+    generators="${CORE_GENERATORS}"
+    if [ "${1:-}" = "--all" ]; then
+        generators="${ALL_GENERATORS}"
+    fi
+
     new_image=$(build_image)
 
     while read -r name region regions; do
@@ -112,7 +121,7 @@ cmd_deploy() {
             fi
         fi
     done <<EOF
-$(echo "${GENERATORS}" | grep -v '^\s*$')
+$(echo "${generators}" | grep -v '^\s*$')
 EOF
 
     cmd_start
@@ -146,7 +155,7 @@ cmd_status() {
 }
 
 case "${1:-}" in
-    deploy) cmd_deploy ;;
+    deploy) cmd_deploy "${2:-}" ;;
     start)  cmd_start ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
@@ -155,10 +164,11 @@ case "${1:-}" in
 usage: ./fly-load.sh <command>
 
 commands:
-  deploy    build image and create or update load generator machines, then start them
-  start     start all stopped load generator machines
-  stop      stop all running load generator machines
-  status    list all load generator machines with their current state
+  deploy [--all]    build image and create or update load generator machines, then start them
+                    --all deploys all 8 generators; default deploys only gen-europe-west (ams)
+  start             start all stopped load generator machines
+  stop              stop all running load generator machines
+  status            list all load generator machines with their current state
 EOF
         exit 1
         ;;
