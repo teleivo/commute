@@ -21,19 +21,19 @@
         "sort": 0
       },
       {
-        "name": "instance",
-        "label": "Instance",
+        "name": "node",
+        "label": "Node",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(commute_http_requests_total, instance)",
+        "query": "label_values(commute_http_requests_total, node)",
+        "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
-        "multi": false,
+        "multi": true,
         "current": {},
-        "refresh": 2,
         "sort": 1
       }
     ]
@@ -55,7 +55,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (path, status) (rate(commute_http_requests_total{instance=~\"$instance\"}[1m]))",
+          "expr": "sum by (path, status) (rate(commute_http_requests_total{node=~\"$node\"}[1m]))",
           "legendFormat": "{{path}} \u00b7 {{status}}",
           "refId": "A"
         }
@@ -104,17 +104,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\"}[1m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\"}[1m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\"}[1m])))",
           "legendFormat": "p99",
           "refId": "C"
         }

@@ -3,12 +3,10 @@
 * test all still works on fly
   * deploy in another continent app+load
 
-* wire up metrics on fly.io managed prometheus/grafana
-  * allo selecting datasource in my dashboards
-  * try the entire workflow on fly with a reasonable rate
-    * add more regions (other continents)
-    * add more load generators
-    * get familiar with grafana/fly
+* try the entire workflow on fly with a reasonable rate
+  * add more regions (other continents)
+  * add more load generators
+  * get familiar with grafana/fly
 
 * deploy fully
 * what load can the kv-store handle well?

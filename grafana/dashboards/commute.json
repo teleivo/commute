@@ -21,6 +21,22 @@
         "sort": 0
       },
       {
+        "name": "node",
+        "label": "Node",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(commute_http_requests_total, node)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {},
+        "sort": 1
+      },
+      {
         "name": "key",
         "label": "Key",
         "type": "query",
@@ -67,7 +83,7 @@
       },
       "targets": [
         {
-          "expr": "commute_gcounter_node_increments{key=\"$key\"}",
+          "expr": "commute_gcounter_node_increments{key=\"$key\",node=~\"$node\"}",
           "legendFormat": "{{node}}",
           "refId": "A"
         }
