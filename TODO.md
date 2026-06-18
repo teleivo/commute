@@ -4,6 +4,10 @@
   * locally
   * on fly
 
+* wire up metrics on fly.io managed prometheus/grafana
+  * how to configure grafana dashboards on fly?
+  * do I then need to adapt my local setup?
+
 * Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
   pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
   demo to show a node joining the cluster live.
