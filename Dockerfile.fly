@@ -16,7 +16,6 @@ ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.revision="${COMMIT}" \
       org.opencontainers.image.created="${BUILD_TIME}"
-RUN apk add --no-cache bind-tools
 COPY --from=build /bin/co /bin/co
 COPY fly-init.sh /bin/fly-init.sh
 RUN chmod +x /bin/fly-init.sh
