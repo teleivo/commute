@@ -1,11 +1,11 @@
 {
-  "title": "Commute HTTP",
-  "uid": "commute-http",
+  "title": "Commute Load Generator",
+  "uid": "commute-load",
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "1s",
+  "refresh": "10s",
   "time": {
-    "from": "now-5m",
+    "from": "now-15m",
     "to": "now"
   },
   "templating": {
@@ -19,51 +19,19 @@
         "includeAll": false,
         "multi": false,
         "sort": 0
-      },
-      {
-        "name": "region",
-        "label": "Region",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(commute_http_requests_total, region)",
-        "refresh": 2,
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "current": {},
-        "sort": 1
-      },
-      {
-        "name": "node",
-        "label": "Node",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(commute_http_requests_total, node)",
-        "refresh": 2,
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "current": {},
-        "sort": 1
       }
     ]
   },
   "panels": [
     {
-      "id": 1,
-      "title": "HTTP requests/s by path and status",
+      "id": 3,
+      "title": "Load generator request rate",
       "type": "timeseries",
       "gridPos": {
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 0,
-        "w": 24,
-        "h": 12
+        "y": 0
       },
       "datasource": {
         "type": "prometheus",
@@ -71,8 +39,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (path, status) (rate(commute_http_requests_total{node=~\"$node\",region=~\"$region\"}[1m]))",
-          "legendFormat": "{{path}} \u00b7 {{status}}",
+          "expr": "sum(rate(request_seconds_count[1m]))",
+          "legendFormat": "requests/s",
           "refId": "A"
         }
       ],
@@ -82,10 +50,6 @@
           "custom": {
             "fillOpacity": 20,
             "lineWidth": 2,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
             "gradientMode": "none"
           },
           "color": {
@@ -105,14 +69,14 @@
       }
     },
     {
-      "id": 2,
-      "title": "HTTP request latency percentiles",
+      "id": 4,
+      "title": "Load generator latency percentiles (client-side)",
       "type": "timeseries",
       "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 24,
-        "h": 12
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
       },
       "datasource": {
         "type": "prometheus",
@@ -120,17 +84,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(request_seconds_bucket[1m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(request_seconds_bucket[1m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(request_seconds_bucket[1m])))",
           "legendFormat": "p99",
           "refId": "C"
         }

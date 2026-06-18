@@ -21,6 +21,20 @@
         "sort": 0
       },
       {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(commute_gcounter_node_increments{key=\"$key\"}, region)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "hide": 2
+      },
+      {
         "name": "node",
         "label": "Node",
         "type": "query",
@@ -49,27 +63,13 @@
         "includeAll": false,
         "multi": false,
         "sort": 1
-      },
-      {
-        "name": "region",
-        "label": "Region",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(commute_gcounter_node_increments{key=\"$key\"}, region)",
-        "refresh": 2,
-        "includeAll": false,
-        "multi": false,
-        "hide": 2
       }
     ]
   },
   "panels": [
     {
       "id": 1,
-      "title": "GCounter increments per node (scraping $region)",
+      "title": "GCounter increments per node",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -83,7 +83,7 @@
       },
       "targets": [
         {
-          "expr": "commute_gcounter_node_increments{key=\"$key\",node=~\"$node\"}",
+          "expr": "commute_gcounter_node_increments{key=\"$key\",node=~\"$node\",region=~\"$region\"}",
           "legendFormat": "{{node}}",
           "refId": "A"
         }

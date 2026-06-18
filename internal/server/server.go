@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -116,15 +117,19 @@ func New(cfg Config) (*Server, error) {
 	handler.HandleFunc("POST /internal/gossip", srv.postGossip)
 	handler.HandleFunc("POST /internal/ack", srv.postAck)
 
+	region := os.Getenv("FLY_REGION")
+	if region == "" {
+		region = cfg.NodeID
+	}
 	httpRequestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name:        "commute_http_requests_total",
 		Help:        "Total HTTP requests by route pattern, status code, and node.",
-		ConstLabels: prometheus.Labels{"node": cfg.NodeID},
+		ConstLabels: prometheus.Labels{"node": cfg.NodeID, "region": region},
 	}, []string{"path", "status"})
 	httpRequestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:        "commute_http_request_duration_seconds",
 		Help:        "HTTP request latency by route pattern, status code, and node.",
-		ConstLabels: prometheus.Labels{"node": cfg.NodeID},
+		ConstLabels: prometheus.Labels{"node": cfg.NodeID, "region": region},
 		Buckets: []float64{.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1},
 	}, []string{"path", "status"})
 

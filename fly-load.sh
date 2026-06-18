@@ -16,7 +16,7 @@ LOAD_APP="commute-load"
 LOAD_CONFIG="load/fly.toml"
 COUNTER_KEY="${COUNTER_KEY:-gopher-vs-crab}"
 INCREMENT="${INCREMENT:-1}"
-RATE="${RATE:-1000/s}"
+RATE="${RATE:-200/s}"
 
 # One load generator per continent, each owning nearby regions.
 # Name maps to: region, owned REGIONS list

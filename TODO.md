@@ -1,15 +1,13 @@
 # TODO
 
-* test all still works on fly
-  * deploy in another continent app+load
-
-* try the entire workflow on fly with a reasonable rate
+* deploy in another continent app+load
+  * improve my scripts towards final demo
+  * check what rate works and how I can tune it on deploy or update?
   * add more regions (other continents)
   * add more load generators
-  * get familiar with grafana/fly
 
 * deploy fully
-* what load can the kv-store handle well?
+* try hitting 1 billion
 * fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
   Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
 
@@ -24,11 +22,7 @@
   * twice
   * go through slides again
 
-nice to have
-* let a new node join?
-* show divergence across nodes: deploy Prometheus inside the Fly 6PN mesh so it can scrape all
-  nodes directly, then proxy only Prometheus (9090:9090) locally — one tunnel, full multi-node
-  view, one panel per node in Grafana
+* show divergence across nodes: how? using dropdown selecting between different nodes?
 
 ## Demo
 
