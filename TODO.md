@@ -1,19 +1,9 @@
 # TODO
 
 * deploy in another continent app+load
-  * improve my scripts towards final demo
-  * check what rate works and how I can tune it on deploy or update?
   * add more regions (other continents)
   * add more load generators
-
-* deploy fully
   * what rate should I settle on?
-
-* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
-  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
-
-* local rate: at least 24000/s with 3 nodes
-   * try getting to 1 billion locally
 
 * finish slides
 
@@ -21,6 +11,14 @@
   * document
   * twice
   * go through slides again
+
+* profile and fix some things
+
+* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
+  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+
+* local rate: at least 24000/s with 3 nodes
+   * try getting to 1 billion locally
 
 * show divergence across nodes: how? using dropdown selecting between different nodes?
 

@@ -1,10 +1,10 @@
 # Demo
 
-Show a PNCounter diverging and converging across a live multi-region cluster on Fly.io. Nodes in
-Amsterdam, Frankfurt, and London each accept increments independently. Fly.io's managed Prometheus
-scrapes all nodes automatically and Grafana at fly-metrics.net graphs the per-node GCounter slots
-as a stacked area chart — the stack height is the true total. The audience watches the areas shift
-as gossip propagates increments across regions, then stabilize once writes stop.
+Show a PNCounter diverging and converging across a live multi-region cluster on Fly.io. Nodes
+across up to 17 regions each accept increments independently. Fly.io's managed Prometheus scrapes
+all nodes automatically and Grafana at fly-metrics.net graphs the per-node GCounter slots as a
+stacked area chart — the stack height is the true total. The audience watches the areas shift as
+gossip propagates increments across regions, then stabilize once writes stop.
 
 ## What is shown
 
@@ -37,19 +37,38 @@ Subsequent runs (nodes already exist, just wake them):
 ./fly.sh start
 ```
 
-Check all three are running:
+Check all nodes are running:
 
 ```sh
 ./fly.sh status
 ```
 
-The three base nodes are:
+The three core nodes are:
 
-| Name   | Region |
-|--------|--------|
-| node-0 | ams    |
-| node-1 | fra    |
-| node-2 | lhr    |
+| Name   | Region | Location               |
+|--------|--------|------------------------|
+| node-0 | ams    | Amsterdam, Netherlands |
+| node-1 | fra    | Frankfurt, Germany     |
+| node-2 | lhr    | London, United Kingdom |
+
+With `./fly.sh deploy --all`, 14 additional nodes are deployed:
+
+| Name    | Region | Location                     |
+|---------|--------|------------------------------|
+| node-3  | iad    | Ashburn, Virginia (US)       |
+| node-4  | ord    | Chicago, Illinois (US)       |
+| node-5  | dfw    | Dallas, Texas (US)           |
+| node-6  | jnb    | Johannesburg, South Africa   |
+| node-7  | lax    | Los Angeles, California (US) |
+| node-8  | cdg    | Paris, France                |
+| node-9  | sjc    | San Jose, California (US)    |
+| node-10 | gru    | Sao Paulo, Brazil            |
+| node-11 | ewr    | Secaucus, NJ (US)            |
+| node-12 | sin    | Singapore                    |
+| node-13 | arn    | Stockholm, Sweden            |
+| node-14 | syd    | Sydney, Australia            |
+| node-15 | nrt    | Tokyo, Japan                 |
+| node-16 | yyz    | Toronto, Canada              |
 
 ### 2. Start the load generator
 
