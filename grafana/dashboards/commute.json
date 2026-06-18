@@ -42,7 +42,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(commute_http_requests_total, node)",
+        "query": "label_values(commute_gcounter_node_increments, node)",
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -84,7 +84,7 @@
       "targets": [
         {
           "expr": "commute_gcounter_node_increments{key=\"$key\",node=~\"$node\",region=~\"$region\"}",
-          "legendFormat": "{{node}}",
+          "legendFormat": "{{peer}}",
           "refId": "A"
         }
       ],

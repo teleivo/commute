@@ -34,9 +34,8 @@ func httpMetricsMiddleware(next http.Handler, counter *prometheus.CounterVec, du
 // storeCollector is a prometheus.Collector that exposes per-node GCounter increments from the
 // store's PNCounters. Metrics are computed at scrape time so no write-path overhead is added.
 type storeCollector struct {
-	store  *Store
-	region string
-	desc   *prometheus.Desc
+	store *Store
+	desc  *prometheus.Desc
 }
 
 func newStoreCollector(store *Store, nodeID string) *storeCollector {
@@ -45,13 +44,12 @@ func newStoreCollector(store *Store, nodeID string) *storeCollector {
 		region = nodeID
 	}
 	return &storeCollector{
-		store:  store,
-		region: region,
+		store: store,
 		desc: prometheus.NewDesc(
 			"commute_gcounter_node_increments",
 			"Per-node increment tally of the PNCounter's internal GCounter.",
-			[]string{"key", "node", "region"},
-			nil,
+			[]string{"key", "peer"},
+			prometheus.Labels{"node": nodeID, "region": region},
 		),
 	}
 }
@@ -62,12 +60,12 @@ func (c *storeCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *storeCollector) Collect(ch chan<- prometheus.Metric) {
 	for key, nodes := range c.store.CounterIncrements() {
-		for node, v := range nodes {
+		for peer, v := range nodes {
 			ch <- prometheus.MustNewConstMetric(
 				c.desc,
 				prometheus.GaugeValue,
 				float64(v),
-				key, string(node), c.region,
+				key, string(peer),
 			)
 		}
 	}
