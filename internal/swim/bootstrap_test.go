@@ -298,21 +298,52 @@ func TestBootstrapDeadPeerNotResurrectedByJoin(t *testing.T) {
 	})
 }
 
-// joinMembers calls m.JoinHandler directly with peers as the request body and
-// returns the member UDP addresses from the response.
-func joinMembers(t *testing.T, m *swim.Member, peers ...string) []string {
+// TestBootstrapDeadPeerRejoinsClearsDeadPeers verifies that a peer previously
+// declared dead is re-added to the member list when it directly rejoins.
+func TestBootstrapDeadPeerRejoinsClearsDeadPeers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// 2 nodes: node-0 probes node-1; node-1 is partitioned so node-0
+		// declares it dead. node-1 then directly rejoins node-0.
+		// node-1 must reappear in node-0's member list.
+		c := newCluster(t, 2)
+		c.partition(1)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		c.start(ctx)
+
+		// Wait for node-0 to declare node-1 dead.
+		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
+		synctest.Wait()
+
+		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0))
+
+		// node-1 directly rejoins node-0 with itself as Src.
+		members := joinMembers(t, c.members[0], c.addr(1))
+
+		assert.True(t, slices.Contains(members, c.addr(1)), "rejoining node-1 must be re-added to node-0's member list")
+	})
+}
+
+// joinMembers calls m.JoinHandler directly with src as the caller and peers as
+// the request body, and returns the member UDP addresses from the response.
+// src is included in Peers, mirroring how the real bootstrap loop includes the
+// joining node's own address alongside its known peers.
+func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []string {
 	t.Helper()
 	type joinPeer struct {
 		UDPAddr  string `json:"udpAddr"`
 		HTTPPort uint16 `json:"httpPort"`
 	}
-	jps := make([]joinPeer, len(peers))
-	for i, p := range peers {
+	all := append([]string{src}, peers...)
+	jps := make([]joinPeer, len(all))
+	for i, p := range all {
 		jps[i] = joinPeer{UDPAddr: p}
 	}
 	body, err := json.Marshal(struct {
+		Src   string     `json:"src"`
 		Peers []joinPeer `json:"peers"`
-	}{Peers: jps})
+	}{Src: src, Peers: jps})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/internal/swim/join", bytes.NewReader(body))

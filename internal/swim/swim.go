@@ -677,9 +677,8 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			if jp.UDPAddr == self {
 				continue
 			}
-			if _, ok := m.deadPeers[jp.UDPAddr]; ok {
-				continue
-			}
+			// A join is an explicit alive signal: remove from deadPeers so the peer can rejoin.
+			delete(m.deadPeers, jp.UDPAddr)
 			peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
 			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
 				m.peers = append(m.peers, peer)
@@ -704,6 +703,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 }
 
 type joinBody struct {
+	Src   string     `json:"src"`
 	Peers []joinPeer `json:"peers"`
 }
 
@@ -733,6 +733,11 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.muPeers.Lock()
+	// The caller rejoining is a direct alive signal: remove it from deadPeers so it can
+	// re-enter the member list. Third-party peers pushed in req.Peers are hearsay and must
+	// not override local failure detection: a partitioned node could otherwise be resurrected
+	// by an outsider that has not yet learned about the failure.
+	delete(m.deadPeers, req.Src)
 	for _, jp := range req.Peers {
 		if jp.UDPAddr == m.UDPAddr() {
 			continue
