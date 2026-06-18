@@ -1,10 +1,10 @@
 # Demo
 
 Show a PNCounter diverging and converging across a live multi-region cluster on Fly.io. Nodes in
-Amsterdam, Frankfurt, and London each accept increments independently. A local Prometheus + Grafana
-stack scrapes one node via `fly proxy` and graphs the per-node GCounter slots as a stacked area
-chart — the stack height is the true total. The audience watches the areas shift as gossip
-propagates increments across regions, then stabilize once writes stop.
+Amsterdam, Frankfurt, and London each accept increments independently. Fly.io's managed Prometheus
+scrapes all nodes automatically and Grafana at fly-metrics.net graphs the per-node GCounter slots
+as a stacked area chart — the stack height is the true total. The audience watches the areas shift
+as gossip propagates increments across regions, then stabilize once writes stop.
 
 ## What is shown
 
@@ -20,7 +20,6 @@ total lags. Convergence is visible when all areas stabilize and stop shifting.
 ## Prerequisites
 
 * `fly` CLI authenticated (`fly auth login`)
-* Docker + Docker Compose for the local monitoring stack
 
 ## Running the demo
 
@@ -46,48 +45,35 @@ Check all three are running:
 
 The three base nodes are:
 
-| Name   | Region     |
-|--------|------------|
-| node-0 | ams        |
-| node-1 | fra        |
-| node-2 | lhr        |
+| Name   | Region |
+|--------|--------|
+| node-0 | ams    |
+| node-1 | fra    |
+| node-2 | lhr    |
 
-### 2. Start the local monitoring stack
-
-In a separate terminal, proxy the Amsterdam node so Prometheus can scrape it:
-
-```sh
-fly proxy 8080:8080 --app commute --bind-addr 0.0.0.0 --select
-```
-
-Select `node-0` (ams) when prompted. `--bind-addr 0.0.0.0` is required so the Prometheus container
-can reach the proxy via the Docker bridge network.
-
-Then start Prometheus and Grafana:
-
-```sh
-docker compose -f docker-compose.metrics.yml -f docker-compose.metrics.fly.yml up
-```
-
-Open Grafana at <http://127.0.0.1:3000/d/commute>. The dashboard auto-refreshes every 1s.
-
-### 3. Send increments
-
-Start the load generator machine — it discovers all commute nodes via DNS and fires increments at
-each node concurrently:
+### 2. Start the load generator
 
 ```sh
 ./fly-load.sh start
 ```
 
-Watch the stacked areas grow in Grafana. Stop writes to show convergence:
+The load generator discovers all commute nodes via DNS and fires increments at each node via
+vegeta. To override the default rate of 1000/s:
+
+```sh
+RATE=2000/s ./fly-load.sh deploy
+```
+
+### 3. Watch in Grafana
+
+Open Grafana at <https://fly-metrics.net>. The dashboard auto-refreshes every 15s (Fly's scrape
+interval).
+
+Watch the stacked areas grow. Stop writes to show convergence:
 
 ```sh
 ./fly-load.sh stop
 ```
-
-The counter key is `gopher-vs-crab` by default. The load generator re-resolves node addresses every
-10 seconds, so any newly joined demo node is picked up automatically.
 
 ### 4. Show a new node joining (optional)
 
@@ -103,8 +89,9 @@ stacked chart as gossip delivers the counter state to the new node.
 ### 5. Wind down
 
 ```sh
+./fly-load.sh stop
 ./fly.sh pause
-docker compose -f docker-compose.metrics.yml -f docker-compose.metrics.fly.yml down
+fly machine suspend <demo-node-id>
 ```
 
 ## Local testing (no Fly.io)
@@ -115,26 +102,24 @@ Bring up a 3-node local cluster together with the monitoring stack:
 docker compose -f docker-compose.yml -f docker-compose.metrics.yml up --build
 ```
 
-Send increments to the local nodes:
+The load generator starts automatically at 1000/s. To override:
 
 ```sh
-curl -X POST localhost:8080/counters/hits -d '{"increment": 5}'
-curl -X POST localhost:8081/counters/hits -d '{"increment": 3}'
-curl -X POST localhost:8082/counters/hits -d '{"increment": 7}'
+RATE=5000/s docker compose -f docker-compose.yml -f docker-compose.metrics.yml up --build
 ```
 
-Open Grafana at <http://127.0.0.1:3000/d/commute>, select key `hits`.
+Open Grafana at <http://127.0.0.1:3000/d/commute>.
 
-To reset the Prometheus and Grafana state between runs:
+To reset Prometheus and Grafana state between runs:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.metrics.yml down -v
+docker compose -f docker-compose.yml -f docker-compose.metrics.yml down --volumes
 ```
 
 ## Key configuration
 
-| Parameter | Default | Flag |
-|-----------|---------|------|
-| Gossip interval | 5s | `-gossip-interval` |
-| SWIM protocol period | — | `-swim-protocol-period` |
-| Prometheus scrape interval | 1s | `prometheus.yml` |
+| Parameter                  | Default | Where              |
+|----------------------------|---------|--------------------|
+| Load rate                  | 1000/s  | `RATE` env var     |
+| Gossip interval            | 5s      | `-gossip-interval` |
+| Prometheus scrape interval | 15s     | Fly.io managed     |
