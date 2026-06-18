@@ -1,7 +1,6 @@
 FROM alpine:3
-RUN apk add --no-cache bind-tools curl
+RUN apk add --no-cache bind-tools
 
-# vegeta is used by load-local.sh for the local docker-compose setup; not used on Fly
 ARG VEGETA_VERSION=12.13.0
 ARG VEGETA_SHA256=e8759ce45c14e18374bdccd3ba6068197bc3a9f9b7e484db3837f701b9d12e61
 RUN wget -qO /tmp/vegeta.tar.gz \
@@ -12,7 +11,6 @@ RUN wget -qO /tmp/vegeta.tar.gz \
     && rm /tmp/vegeta.tar.gz
 
 COPY load/load.sh /bin/load.sh
-# load-local.sh is used by the local docker-compose setup (entrypoint override); not used on Fly
 COPY load/load-local.sh /bin/load-local.sh
 RUN chmod +x /bin/load.sh /bin/load-local.sh
 ENTRYPOINT ["/bin/load.sh"]

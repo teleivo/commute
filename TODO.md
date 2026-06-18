@@ -1,23 +1,25 @@
 # TODO
 
-* load generators:
-  * what load can the kv-store handle well?
+* what load can the kv-store handle well?
+  * locally
+  * on fly
 
 * Pre-create 15 suspended demo nodes (one per non-base Fly region) each with `CO_SEED_IDS`
   pointing at the base three (node-0 ams, node-1 fra, node-2 lhr). Wake any subset during the
   demo to show a node joining the cluster live.
 
-* ? Add a `demo-node` command to `fly.sh` to start/suspend the pre-created demo nodes by name.
-
-* show divergence across nodes: deploy Prometheus inside the Fly 6PN mesh so it can scrape all
-  nodes directly, then proxy only Prometheus (9090:9090) locally — one tunnel, full multi-node
-  view, one panel per node in Grafana
-
 * fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
   Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
 
 * start fresh on fly.io and go through all steps
+  * document
   * twice
+
+nice to have
+* let a new node join?
+* show divergence across nodes: deploy Prometheus inside the Fly 6PN mesh so it can scrape all
+  nodes directly, then proxy only Prometheus (9090:9090) locally — one tunnel, full multi-node
+  view, one panel per node in Grafana
 
 ## Demo
 
