@@ -5,7 +5,7 @@
 #
 # Commands:
 #   deploy [--all]    build image and create or update machines if image or config changed, then start them
-#                     --all deploys all 17 regions; default deploys only the 3 core nodes (ams, fra, lhr)
+#                     --all deploys all 16 regions; default deploys only the 3 core nodes (ams, fra, lhr)
 #   start             start all stopped machines
 #   stop              stop all running machines
 #   status            list all machines with their current state
@@ -86,7 +86,7 @@ cmd_deploy() {
     update_machine node-2 "${new_image}" "${id0},${id1}" "${commit}"
 
     if [ "${all}" = "1" ]; then
-        # All remaining nodes seed from the 3 core nodes. No second pass needed since
+        # Remaining 13 nodes seed from the 3 core nodes. No second pass needed since
         # core IDs are stable after pass 1. Bootstrap propagates the full peer list.
         core_seeds="${id0},${id1},${id2}"
         create_machine_if_missing node-3  iad "${new_image}" "${commit}"
@@ -100,9 +100,8 @@ cmd_deploy() {
         create_machine_if_missing node-11 ewr "${new_image}" "${commit}"
         create_machine_if_missing node-12 sin "${new_image}" "${commit}"
         create_machine_if_missing node-13 arn "${new_image}" "${commit}"
-        create_machine_if_missing node-14 syd "${new_image}" "${commit}"
-        create_machine_if_missing node-15 nrt "${new_image}" "${commit}"
-        create_machine_if_missing node-16 yyz "${new_image}" "${commit}"
+        create_machine_if_missing node-14 nrt "${new_image}" "${commit}"
+        create_machine_if_missing node-15 yyz "${new_image}" "${commit}"
         update_machine node-3  "${new_image}" "${core_seeds}" "${commit}"
         update_machine node-4  "${new_image}" "${core_seeds}" "${commit}"
         update_machine node-5  "${new_image}" "${core_seeds}" "${commit}"
@@ -116,7 +115,6 @@ cmd_deploy() {
         update_machine node-13 "${new_image}" "${core_seeds}" "${commit}"
         update_machine node-14 "${new_image}" "${core_seeds}" "${commit}"
         update_machine node-15 "${new_image}" "${core_seeds}" "${commit}"
-        update_machine node-16 "${new_image}" "${core_seeds}" "${commit}"
     fi
 
     cmd_start
@@ -204,7 +202,7 @@ usage: ./fly.sh <command>
 
 commands:
   deploy [--all]    build image and create or update machines if image or config changed, then start them
-                    --all deploys all 17 regions; default deploys only the 3 core nodes (ams, fra, lhr)
+                    --all deploys all 16 regions; default deploys only the 3 core nodes (ams, fra, lhr)
   start             start all stopped machines
   stop              stop all running machines
   pause             suspend all machines (faster resume than stop)

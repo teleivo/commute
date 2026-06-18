@@ -26,7 +26,7 @@ gen-europe-east  cdg  cdg,arn
 gen-us-east      iad  iad,ewr,yyz
 gen-us-central   ord  ord,dfw
 gen-us-west      sjc  sjc,lax
-gen-asia         sin  sin,nrt,syd
+gen-asia         sin  sin,nrt
 gen-southam      gru  gru
 gen-africa       jnb  jnb
 "
