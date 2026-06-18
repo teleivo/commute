@@ -34,6 +34,9 @@
 6. `./fly-load.sh stop` — stop load, watch convergence on the Grafana panel
 7. `./fly.sh pause` + `fly machine suspend <demo-node>` when done
 
+* make hardcoded timeouts configurable via flags: gossip ack timeout (server.go, currently 5s),
+  SWIM bootstrap join timeout (swim.go, currently 5s)
+
 ## SWIM
 
 * Rethink ports and the swim/server relationship. Currently `AppPort` in `swim.Config` leaks an

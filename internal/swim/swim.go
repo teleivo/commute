@@ -624,7 +624,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		return time.Duration(j)
 	}
 	interval := 5 * time.Second
-	joinTimeout := 500 * time.Millisecond
+	joinTimeout := 5 * time.Second
 	var waitDuration time.Duration
 	wait := time.NewTimer(waitDuration)
 	defer wait.Stop()

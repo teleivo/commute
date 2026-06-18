@@ -527,7 +527,7 @@ func (srv *Server) sendAck(ackMsg AckMessage, sender string) {
 		return
 	}
 
-	reqCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+sender+"/internal/ack", bytes.NewReader(ack))
 	if err != nil {
 		cancel()
