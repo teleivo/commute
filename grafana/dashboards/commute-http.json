@@ -71,8 +71,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (path, status) (rate(commute_http_requests_total{node=~\"$node\",region=~\"$region\"}[1m]))",
-          "legendFormat": "{{path}} \u00b7 {{status}}",
+          "expr": "sum by (path, status) (rate(commute_http_requests_total{node=~\"$node\",region=~\"$region\"}[$__rate_interval]))",
+          "legendFormat": "{{path}} · {{status}}",
           "refId": "A"
         }
       ],
@@ -96,7 +96,7 @@
       "options": {
         "tooltip": {
           "mode": "multi",
-          "sort": "none"
+          "sort": "desc"
         },
         "legend": {
           "displayMode": "list",
@@ -120,17 +120,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[$__rate_interval])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(commute_http_request_duration_seconds_bucket{node=~\"$node\",region=~\"$region\"}[$__rate_interval])))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -151,7 +151,7 @@
       "options": {
         "tooltip": {
           "mode": "multi",
-          "sort": "none"
+          "sort": "desc"
         },
         "legend": {
           "displayMode": "list",

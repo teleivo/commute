@@ -21,20 +21,6 @@
         "sort": 0
       },
       {
-        "name": "region",
-        "label": "Region",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(commute_gcounter_node_increments{key=\"$key\"}, region)",
-        "refresh": 2,
-        "includeAll": false,
-        "multi": false,
-        "hide": 2
-      },
-      {
         "name": "node",
         "label": "Node",
         "type": "query",
@@ -83,7 +69,7 @@
       },
       "targets": [
         {
-          "expr": "max by (peer) (commute_gcounter_node_increments{key=\"$key\",node=~\"$node\",region=~\"$region\"})",
+          "expr": "max by (peer) (commute_gcounter_node_increments{key=\"$key\",node=~\"$node\"})",
           "legendFormat": "{{peer}}",
           "refId": "A"
         }
@@ -107,7 +93,7 @@
       "options": {
         "tooltip": {
           "mode": "multi",
-          "sort": "none"
+          "sort": "desc"
         },
         "legend": {
           "displayMode": "list",
