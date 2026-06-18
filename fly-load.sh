@@ -52,6 +52,12 @@ machine_env() {
             '.[] | select(.name == $name) | .config.env[$key] // ""'
 }
 
+machine_metadata() {
+    machines_json \
+        | jq --raw-output --arg name "${1}" --arg key "${2}" \
+            '.[] | select(.name == $name) | .config.metadata[$key] // ""'
+}
+
 build_image() {
     build_output=$(fly deploy \
         --build-only \
@@ -87,12 +93,20 @@ cmd_deploy() {
                 --env REGIONS="${regions}" \
                 --env COUNTER_KEY="${COUNTER_KEY}" \
                 --env INCREMENT="${INCREMENT}" \
-                --env RATE="${RATE}"
+                --env RATE="${RATE}" \
+                --metadata fly_prometheus_port=8880 \
+                --metadata fly_prometheus_path=/metrics
         else
             current_image=$(machine_image "${name}")
             current_regions=$(machine_env "${name}" "REGIONS")
             current_rate=$(machine_env "${name}" "RATE")
-            if [ "${current_image}" = "${new_image}" ] && [ "${current_regions}" = "${regions}" ] && [ "${current_rate}" = "${RATE}" ]; then
+            current_prom_port=$(machine_metadata "${name}" "fly_prometheus_port")
+            current_prom_path=$(machine_metadata "${name}" "fly_prometheus_path")
+            if [ "${current_image}" = "${new_image}" ] \
+                && [ "${current_regions}" = "${regions}" ] \
+                && [ "${current_rate}" = "${RATE}" ] \
+                && [ "${current_prom_port}" = "8880" ] \
+                && [ "${current_prom_path}" = "/metrics" ]; then
                 echo "${name}: already up to date, skipping"
             else
                 echo "${name}: updating (id=${id})"
@@ -104,6 +118,8 @@ cmd_deploy() {
                     --env COUNTER_KEY="${COUNTER_KEY}" \
                     --env INCREMENT="${INCREMENT}" \
                     --env RATE="${RATE}" \
+                    --metadata fly_prometheus_port=8880 \
+                    --metadata fly_prometheus_path=/metrics \
                     --yes
             fi
         fi
