@@ -1,5 +1,8 @@
 # TODO
 
+* test all still works on fly
+  * deploy in another continent app+load
+
 * wire up metrics on fly.io managed prometheus/grafana
   * allo selecting datasource in my dashboards
   * try the entire workflow on fly with a reasonable rate
@@ -7,12 +10,10 @@
     * add more load generators
     * get familiar with grafana/fly
 
-* test all still works on fly
-  * deploy in another continent app+load
-  * deploy fully
-  * what load can the kv-store handle well?
-  * fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
-    Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
+* deploy fully
+* what load can the kv-store handle well?
+* fine-tune gossip interval (default 5s), scrape interval (1s), and SWIM protocol period for the
+  Fly.io demo — slow enough to see divergence, fast enough to not bore the audience
 
 * what load can the kv-store handle well?
   * on fly

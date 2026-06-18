@@ -37,12 +37,6 @@ machine_env() {
             '.[] | select(.name == $name) | .config.env[$key] // ""'
 }
 
-# Returns the metadata value for the given machine name and key, or empty string.
-machine_metadata() {
-    machines_json \
-        | jq --raw-output --arg name "${1}" --arg key "${2}" \
-            '.[] | select(.name == $name) | .config.metadata[$key] // ""'
-}
 
 # Builds and pushes the image, prints build output to stderr, and prints the
 # image ref (registry.fly.io/...@sha256:...) to stdout.
@@ -100,8 +94,7 @@ create_machine_if_missing() {
         fly machine create "${new_image}" --app "${APP}" --name "${name}" --region "${region}" \
             --env CO_NODE_NAME="${name}" \
             --env CO_COMMIT="${commit}" \
-            --metadata fly_prometheus_port=8080 \
-            --metadata fly_prometheus_path=/metrics
+            --machine-config '{"metrics":{"port":8080,"path":"/metrics"}}'
     fi
 }
 
@@ -115,14 +108,10 @@ update_machine() {
     current_image=$(machine_image "${name}")
     current_seed_ids=$(machine_env "${name}" "CO_SEED_IDS")
     current_commit=$(machine_env "${name}" "CO_COMMIT")
-    current_prom_port=$(machine_metadata "${name}" "fly_prometheus_port")
-    current_prom_path=$(machine_metadata "${name}" "fly_prometheus_path")
 
     if [ "${current_image}" = "${new_image}" ] \
         && [ "${current_seed_ids}" = "${seed_ids}" ] \
-        && [ "${current_commit}" = "${commit}" ] \
-        && [ "${current_prom_port}" = "8080" ] \
-        && [ "${current_prom_path}" = "/metrics" ]; then
+        && [ "${current_commit}" = "${commit}" ]; then
         echo "${name}: already up to date, skipping"
         return
     fi
@@ -133,8 +122,7 @@ update_machine() {
         --env CO_NODE_NAME="${name}" \
         --env CO_SEED_IDS="${seed_ids}" \
         --env CO_COMMIT="${commit}" \
-        --metadata fly_prometheus_port=8080 \
-        --metadata fly_prometheus_path=/metrics \
+        --machine-config '{"metrics":{"port":8080,"path":"/metrics"}}' \
         --yes
 }
 
