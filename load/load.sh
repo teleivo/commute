@@ -11,7 +11,7 @@
 #   REGIONS      Comma-separated list of Fly region codes this generator owns
 #   COUNTER_KEY  Counter key to increment (default: gopher-vs-crab)
 #   INCREMENT    Increment value per request (default: 1)
-#   RATE            Requests per second across all targets (default: 10/s)
+#   RATE            Requests per second across all targets (default: 1000/s)
 #   REPORT_EVERY    Report latency stats every N seconds (default: 10s)
 #   PROMETHEUS_ADDR Address to expose Prometheus metrics on (default: 0.0.0.0:8880)
 #   INTERVAL        Seconds between re-resolution of the node list (default: 10)
@@ -22,7 +22,7 @@ APP="${APP:-commute}"
 REGIONS="${REGIONS:-}"
 COUNTER_KEY="${COUNTER_KEY:-gopher-vs-crab}"
 INCREMENT="${INCREMENT:-1}"
-RATE="${RATE:-10/s}"
+RATE="${RATE:-1000/s}"
 REPORT_EVERY="${REPORT_EVERY:-10s}"
 PROMETHEUS_ADDR="${PROMETHEUS_ADDR:-0.0.0.0:8880}"
 INTERVAL="${INTERVAL:-10}"

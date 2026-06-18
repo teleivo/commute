@@ -16,6 +16,7 @@ LOAD_APP="commute-load"
 LOAD_CONFIG="load/fly.toml"
 COUNTER_KEY="${COUNTER_KEY:-gopher-vs-crab}"
 INCREMENT="${INCREMENT:-1}"
+RATE="${RATE:-1000/s}"
 
 # One load generator per continent, each owning nearby regions.
 # Name maps to: region, owned REGIONS list
@@ -85,11 +86,13 @@ cmd_deploy() {
                 --env APP="${APP}" \
                 --env REGIONS="${regions}" \
                 --env COUNTER_KEY="${COUNTER_KEY}" \
-                --env INCREMENT="${INCREMENT}"
+                --env INCREMENT="${INCREMENT}" \
+                --env RATE="${RATE}"
         else
             current_image=$(machine_image "${name}")
             current_regions=$(machine_env "${name}" "REGIONS")
-            if [ "${current_image}" = "${new_image}" ] && [ "${current_regions}" = "${regions}" ]; then
+            current_rate=$(machine_env "${name}" "RATE")
+            if [ "${current_image}" = "${new_image}" ] && [ "${current_regions}" = "${regions}" ] && [ "${current_rate}" = "${RATE}" ]; then
                 echo "${name}: already up to date, skipping"
             else
                 echo "${name}: updating (id=${id})"
@@ -100,6 +103,7 @@ cmd_deploy() {
                     --env REGIONS="${regions}" \
                     --env COUNTER_KEY="${COUNTER_KEY}" \
                     --env INCREMENT="${INCREMENT}" \
+                    --env RATE="${RATE}" \
                     --yes
             fi
         fi
