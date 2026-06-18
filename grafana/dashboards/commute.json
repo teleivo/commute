@@ -69,7 +69,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "GCounter increments per node",
+      "title": "G-Counter replica increments",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -83,7 +83,7 @@
       },
       "targets": [
         {
-          "expr": "commute_gcounter_node_increments{key=\"$key\",node=~\"$node\",region=~\"$region\"}",
+          "expr": "max by (peer) (commute_gcounter_node_increments{key=\"$key\",node=~\"$node\",region=~\"$region\"})",
           "legendFormat": "{{peer}}",
           "refId": "A"
         }
