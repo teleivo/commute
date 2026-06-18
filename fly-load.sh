@@ -18,19 +18,18 @@ COUNTER_KEY="${COUNTER_KEY:-gopher-vs-crab}"
 INCREMENT="${INCREMENT:-1}"
 RATE="${RATE:-200/s}"
 
-# One load generator per continent, each owning nearby regions.
-# Name maps to: region, owned REGIONS list
+# One load generator per region group, each targeting nearby commute nodes.
+# Name maps to: region, owned REGIONS list (max 3 nodes each)
 GENERATORS="
-gen-europe    ams  ams,fra,lhr
+gen-europe-west  ams  ams,fra,lhr
+gen-europe-east  cdg  cdg,arn
+gen-us-east      iad  iad,ewr,yyz
+gen-us-central   ord  ord,dfw
+gen-us-west      sjc  sjc,lax
+gen-asia         sin  sin,nrt,syd
+gen-southam      gru  gru
+gen-africa       jnb  jnb
 "
-# Remaining generators for full 18-node demo (uncomment when ready):
-# GENERATORS="
-# gen-europe    ams  ams,fra,lhr,cdg,arn
-# gen-us-east   iad  iad,ord,ewr,yyz
-# gen-us-west   sjc  sjc,lax,dfw
-# gen-asia      sin  sin,nrt,syd,bom
-# gen-southam   gru  gru,jnb
-# "
 
 machines_json() {
     fly machine list --app "${LOAD_APP}" --json
