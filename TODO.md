@@ -186,3 +186,8 @@ across a wall until it is removed — at which point diverged state merges and t
   state dump for the convergence indicator.
 * **No game server needed**: the KV nodes *are* the game state; the client is a thin visualiser.
 
+## cherry-pick fly branch
+
+Left out for now
+
+caa455d chore: add commit info to Docker images
