@@ -61,6 +61,10 @@ the generator stops.
 
 * 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
 
+* **Alive events not implemented**: when a node is declared dead and rejoins via bootstrap, only
+  the seeds it contacts re-admit it. The rest of the cluster never learns it is back (alive events
+  are not yet disseminated). The rejoining node gets `gossip rejected` 400s from all non-seed
+  peers indefinitely until alive events are implemented (see SWIM section).
 * Alive events: two halves of the same feature, both needed together. Not needed for the demo
   since the bootstrap loop already handles peer discovery with a 1s retry interval.
   * Emit: `JoinHandler` should push an Alive event onto the queue so it gets piggybacked on
@@ -78,6 +82,9 @@ the generator stops.
   Revisit alongside sequence regression detection.
 
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
+
+* make hardcoded timeouts configurable via flags: gossip ack timeout (server.go, currently 5s),
+  SWIM bootstrap join timeout (swim.go, currently 5s), idle timeout?
 
 ## Testing
 
