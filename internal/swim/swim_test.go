@@ -107,8 +107,8 @@ func TestProbeDirectSuccess(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Several protocol periods: node 0 pings node 1, node 1 replies every time.
-		time.Sleep(3 * c.protocolPeriod)
+		// Round-robin: peer is selected within 2(n-1)=2 periods.
+		time.Sleep(2 * c.protocolPeriod)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string(nil))
@@ -128,10 +128,9 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait one period for bootstrap to populate peers, then past the direct ack
-		// timeout and the indirect ack timeout so ping-req has had time to complete,
-		// but node 1 should survive via node 2.
-		time.Sleep(c.protocolPeriod*2 + c.ackTimeout*2)
+		// Round-robin: node 1 is selected within 2(n-1)=4 periods. Once probed, the direct ack
+		// times out and the indirect ping via node 2 succeeds within the same period.
+		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string(nil))
@@ -152,11 +151,10 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait for bootstrap to populate peers, then past both the direct and
-		// indirect ack timeouts. Bootstrap and Probe start concurrently so Probe
-		// may burn one period before peers are available; each node may also probe
-		// the live peer before the dead one, burning another period.
-		time.Sleep(c.protocolPeriod*4 + c.ackTimeout*2)
+		// Round-robin: node 1 is selected within 2(n-1)=4 periods. Once probed, direct and indirect
+		// pings both time out within the same period. Node 0 and node 2 run concurrently so both
+		// converge within 4 periods.
+		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
@@ -175,9 +173,9 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait one period for bootstrap to populate peers, then past the ack timeout.
-		// The probe loop waits one period before the first probe, so we need three periods total.
-		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
+		// Round-robin: node 1 is selected within 2(n-1)=2 periods. The ack timeout and period
+		// expiry both fall within the same period, so 2 periods is sufficient.
+		time.Sleep(2 * c.protocolPeriod)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
@@ -195,10 +193,9 @@ func TestProbeNoPeers(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
 
-		// Wait one period for bootstrap to populate peers, then for node 0 to declare
-		// node 1 dead, then several more periods to exercise the probe loop with an
-		// empty peer list.
-		time.Sleep(c.protocolPeriod*4 + c.ackTimeout)
+		// Same detection bound as TestProbeDirectFailPeerDead, then extra periods to exercise the
+		// probe loop with an empty peer list.
+		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
 		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})

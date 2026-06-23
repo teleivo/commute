@@ -8,8 +8,6 @@
   and decodes itself — SWIM propagates it without interpreting it. Consider replacing `AppPort`
   with a `Meta []byte` field on `Config` and `Peer` so the SWIM layer stays protocol-agnostic.
 
-* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
-
 * per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
   dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
 
@@ -51,6 +49,7 @@
   Revisit alongside sequence regression detection.
 
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
+  * validation of suspicion timeout > protocol period?
 * dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
   gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
   also fixes the cold-start race where a peer probed before it is reachable is permanently dropped

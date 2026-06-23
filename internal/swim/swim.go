@@ -403,6 +403,7 @@ func (m *Member) Probe(ctx context.Context) {
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	defer ackTimeout.Stop()
 	noPeers := true
+	var cursor int
 
 	for {
 		if ctx.Err() != nil {
@@ -412,9 +413,9 @@ func (m *Member) Probe(ctx context.Context) {
 		periodTimer.Reset(m.protocolPeriod)
 		period := m.period.Add(1)
 
-		m.muPeers.RLock()
+		m.muPeers.Lock()
 		if len(m.peers) == 0 {
-			m.muPeers.RUnlock()
+			m.muPeers.Unlock()
 			logger.Warn("no peers to send ping to")
 			select {
 			case <-ctx.Done():
@@ -423,8 +424,18 @@ func (m *Member) Probe(ctx context.Context) {
 			}
 			continue
 		}
-		peer := m.randomPeer()
-		m.muPeers.RUnlock()
+		if cursor >= len(m.peers) {
+			cursor = 0
+			m.muRng.Lock()
+			for i := 1; i < len(m.peers); i++ {
+				j := m.rng.IntN(i + 1)
+				m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
+			}
+			m.muRng.Unlock()
+		}
+		peer := m.peers[cursor]
+		cursor++
+		m.muPeers.Unlock()
 		if noPeers {
 			noPeers = false
 			logger.Info("peers discovered, starting probe")
@@ -542,13 +553,6 @@ func (m *Member) deletePeer(item EventItem) {
 	if m.notifier != nil {
 		go m.notifier.Notify(NewPeer(item.Event.Node), Dead)
 	}
-}
-
-func (m *Member) randomPeer() Peer {
-	m.muRng.Lock()
-	i := m.rng.IntN(len(m.peers))
-	m.muRng.Unlock()
-	return m.peers[i]
 }
 
 // send delivers msg to peer by resolving its UDP address and writing the message.
@@ -688,6 +692,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		self := m.UDPAddr()
 		var added int
 		m.muPeers.Lock()
+		m.muRng.Lock()
 		for _, jp := range discovered {
 			if jp.UDPAddr == self {
 				continue
@@ -696,7 +701,10 @@ func (m *Member) Bootstrap(ctx context.Context) {
 			delete(m.deadPeers, jp.UDPAddr)
 			peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
 			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
+				i := len(m.peers)
 				m.peers = append(m.peers, peer)
+				j := m.rng.IntN(len(m.peers))
+				m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
 				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
 				if m.notifier != nil {
 					go m.notifier.Notify(peer, Alive)
@@ -704,6 +712,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 				added++
 			}
 		}
+		m.muRng.Unlock()
 		m.muPeers.Unlock()
 		if added > 0 {
 			logger.Info("added peers", "peers_added", added)
@@ -748,6 +757,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.muPeers.Lock()
+	m.muRng.Lock()
 	// The caller rejoining is a direct alive signal: remove it from deadPeers so it can
 	// re-enter the member list. Third-party peers pushed in req.Peers are hearsay and must
 	// not override local failure detection: a partitioned node could otherwise be resurrected
@@ -763,7 +773,10 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
 		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
+			i := len(m.peers)
 			m.peers = append(m.peers, peer)
+			j := m.rng.IntN(len(m.peers))
+			m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
 			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
 			if m.notifier != nil {
 				go m.notifier.Notify(peer, Alive)
@@ -779,6 +792,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		result[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
 	}
 	result[len(result)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.appPort}
+	m.muRng.Unlock()
 	m.muPeers.Unlock()
 
 	e := json.NewEncoder(w)
