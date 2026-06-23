@@ -652,12 +652,6 @@ func newCluster(t *testing.T, n int, clocks ...func() time.Time) *cluster {
 	}
 	client := &http.Client{Transport: c}
 	for i := range n {
-		peers := make([]string, 0, n-1)
-		for j := range n {
-			if i != j {
-				peers = append(peers, addrs[j])
-			}
-		}
 		tcpAddr, err := net.ResolveTCPAddr("tcp", addrs[i])
 		require.NoError(t, err)
 		cfg := server.Config{
