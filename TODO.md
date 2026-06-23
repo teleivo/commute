@@ -51,6 +51,11 @@
   Revisit alongside sequence regression detection.
 
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
+* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
+  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
+  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
+  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
+    SWIM++ adds incarnation numbers and alive refutation
 
 * make hardcoded timeouts configurable via flags: gossip ack timeout (server.go, currently 5s),
   SWIM bootstrap join timeout (swim.go, currently 5s), idle timeout?
@@ -76,16 +81,7 @@ Right now all use discard logger which is sad as passing t.Output() is pretty co
 * can I use maelstrom?
 * how can I use antithesis?
 
-* 4.3 of the paper — "Round-Robin Probe Target Selection" for direct pings
-
-* Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
-* dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
-  gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
-  also fixes the cold-start race where a peer probed before it is reachable is permanently dropped
-  * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
-    SWIM++ adds incarnation numbers and alive refutation
-
-## Phase 3 — Observability
+## Observability
 
 * Prometheus metrics (gossip rounds, messages sent/received, convergence duration)
 * Grafana dashboard (per-node value time-series, converged/diverged state)
@@ -133,12 +129,6 @@ reproduce Almeida 2016 §6 in miniature.
 `dec`. Graph running total per node vs. time — watch them diverge under load then converge
 once you stop. Target sum = 0.
 
-## Phase 4 — SWIM membership
-
-* Implement lifeguard extensions from Hashicorp
-* Garbage collect deltas acked by all neighbors (needs membership to distinguish "left for good"
-  from "temporarily partitioned" before pruning deltas a slow neighbor still needs)
-
 ## Later
 
 * HTTP layer hardening
@@ -150,13 +140,15 @@ once you stop. Target sum = 0.
   * cap on max number of Adds/Removes per request
   * decide and document what valid causal-context base64 / JSON looks like (size, shape, and
     bounds on `C(r)` so a malicious client can't wipe siblings via a bogus-high own-id counter)
+* Implement lifeguard extensions from Hashicorp
+* Garbage collect deltas acked by all neighbors (needs membership to distinguish "left for good"
+  from "temporarily partitioned" before pruning deltas a slow neighbor still needs)
 * CRDT Map (`map[Key]CRDT`, merge delegates per-key)
 * Property tests with [`rapid`](https://github.com/flyingmutant/rapid) (commutativity, associativity, idempotency)
 * Replace wall clock with hybrid logical clock (HLC) for LWW-Register?
-* binary encoding like automerge-perf for crdt gossip?
+* binary encoding like automerge-perf for crdt gossip? I do not want to add a dep but protobuf would
+  work for this and take most of the work off of me
 * branching
-* design a Zombie game backed by the KV store inspired by tigerbeetle ❤️
-  * Debug endpoints (pause/resume gossip, inject/heal partitions, state dump, peers)
 
 ## Zombie Game
 
@@ -214,8 +206,3 @@ across a wall until it is removed — at which point diverged state merges and t
   state dump for the convergence indicator.
 * **No game server needed**: the KV nodes *are* the game state; the client is a thin visualiser.
 
-## cherry-pick fly branch
-
-Left out for now
-
-caa455d chore: add commit info to Docker images
