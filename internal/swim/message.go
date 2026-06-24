@@ -150,18 +150,14 @@ func (m *Message) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	eventCount := int(data[s+10+targetLen])
-	eventsInput := data[s+11+targetLen : len(data)-4]
 	var events []Event
-	if eventCount > 0 {
+	eventsInput := data[s+11+targetLen : len(data)-4]
+	if eventCount := int(data[s+10+targetLen]); eventCount > 0 {
 		events = make([]Event, eventCount)
 		for i := range events {
-			n := eventHeaderSize + int(eventsInput[1])
-			if n > len(eventsInput) {
-				return fmt.Errorf("event %d node length %d exceeds remaining bytes %d", i, int(eventsInput[1]), len(eventsInput)-eventHeaderSize)
-			}
 			var e Event
-			if err := e.UnmarshalBinary(eventsInput[:n]); err != nil {
+			n, err := e.UnmarshalBinary(eventsInput)
+			if err != nil {
 				return err
 			}
 			events[i] = e

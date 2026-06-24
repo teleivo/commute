@@ -38,10 +38,7 @@ type Member struct {
 	httpClient *http.Client
 	resolve    func(ctx context.Context, addr string) (net.Addr, error)
 
-	// muPeers guards peers and deadPeers
-	peers     []Peer
-	deadPeers map[string]struct{} // keyed by UDP addr
-	muPeers   sync.RWMutex
+	peers *peers
 
 	protocolPeriod      time.Duration
 	ackTimeout          time.Duration
@@ -49,12 +46,11 @@ type Member struct {
 	disseminationFactor int
 	period              atomic.Uint64
 
-	rng        *rand.Rand
-	muRng      sync.Mutex
-	acks       chan Ack
-	eventQueue EventQueue
-	notifier   Notifier
-	logger     *slog.Logger
+	bootstrapRng *rand.Rand // owned exclusively by Bootstrap
+	acks         chan Ack
+	eventQueue   EventQueue
+	notifier     Notifier
+	logger       *slog.Logger
 }
 
 // Config holds the configuration for creating a Member.
@@ -70,13 +66,14 @@ type Config struct {
 	Resolve    func(ctx context.Context, addr string) (net.Addr, error) // if nil, resolves via DNS preferring IPv6
 
 	ProtocolPeriod      time.Duration // T' in the paper: duration of one failure detection round
-	AckTimeout          time.Duration // how long to wait for a direct ack before declaring a peer dead
+	AckTimeout          time.Duration // how long to wait for a direct ack before sending indirect ping-reqs
 	SubgroupSize        int           // k in the paper: number of members used for indirect probing
 	DisseminationFactor int           // multiplier for membership event dissemination count; events are piggybacked DisseminationFactor·log(N) times (SWIM paper Section 4.1)
 
-	Rng      *rand.Rand   // random source for peer selection
-	Notifier Notifier     // if nil, membership changes are not reported
-	Logger   *slog.Logger // if nil, logging is disabled
+	Rng          *rand.Rand   // random source for peer selection
+	BootstrapRng *rand.Rand   // random source for bootstrap interval jitter
+	Notifier     Notifier     // if nil, membership changes are not reported
+	Logger       *slog.Logger // if nil, logging is disabled
 }
 
 // New creates a Member from the given Config.
@@ -163,6 +160,10 @@ func New(cfg Config) (*Member, error) {
 	if rng == nil {
 		rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
+	bootstrapRng := cfg.BootstrapRng
+	if bootstrapRng == nil {
+		bootstrapRng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	}
 	handler := http.NewServeMux()
 	server := http.Server{
 		Handler:     handler,
@@ -183,13 +184,12 @@ func New(cfg Config) (*Member, error) {
 		seeds:               slices.Collect(maps.Keys(seeds)),
 		httpClient:          client,
 		resolve:             resolve,
-		peers:               make([]Peer, 0),
-		deadPeers:           make(map[string]struct{}),
+		peers:               newPeers(rng, cfg.SubgroupSize),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
 		subgroupSize:        cfg.SubgroupSize,
 		disseminationFactor: disseminationFactor,
-		rng:                 rng,
+		bootstrapRng:        bootstrapRng,
 		acks:                make(chan Ack, 1), // shared across rounds; a stale ack can evict a live one via the non-blocking send in Listen
 		eventQueue:          EventQueue{},
 		notifier:            cfg.Notifier,
@@ -236,44 +236,11 @@ func (m *Member) Start(ctx context.Context) error {
 	return nil
 }
 
-// Peer is a SWIM group member. UDPAddr is an unresolved host:port string; DNS is resolved on every
-// send so membership changes propagate without restarting.
-type Peer struct {
-	udpAddr  string
-	httpPort uint16
-}
-
-// NewPeer creates a Peer with the given UDP address.
-func NewPeer(udpAddr string) Peer { return Peer{udpAddr: udpAddr} }
-
-// UDPAddr returns p's unresolved UDP address (host:port).
-func (p Peer) UDPAddr() string { return p.udpAddr }
-
-// HTTPPort returns p's HTTP port.
-func (p Peer) HTTPPort() uint16 { return p.httpPort }
-
-// WithHTTPPort returns a copy of p with the given HTTP port set.
-func (p Peer) WithHTTPPort(port uint16) Peer { p.httpPort = port; return p }
-
-// HTTPAddr returns p's unresolved HTTP address (host:port).
-func (p Peer) HTTPAddr() string {
-	host, _, _ := strings.Cut(p.udpAddr, ":")
-	return host + ":" + strconv.FormatUint(uint64(p.httpPort), 10)
-}
-
-// Ack is an acknowledgement received from a peer.
-type Ack struct {
-	Period uint64
-	Addr   string
-}
-
-// relayKey identifies a pending relay ack for a ping-req. Target is the address
-// of the node being pinged on behalf of the requester; Period is the initiator's
-// protocol period echoed in the ack. A struct key avoids ambiguity from string
-// concatenation (e.g. "1.2.3.4:56"+"78" vs "1.2.3.4:567"+"8").
-type relayKey struct {
-	target string
-	period uint64
+// Notifier is called by a Member when a peer's membership status changes. Notify is called in a
+// goroutine so implementations may block without affecting the probe loop. peer is the SWIM UDP
+// address as given in [Config].Peers (e.g. "node-1:7946"), not any application-layer address.
+type Notifier interface {
+	Notify(peer Peer, kind EventKind)
 }
 
 // UDPAddr returns the unresolved UDP host:port this node advertises to SWIM peers.
@@ -306,9 +273,10 @@ func (m *Member) Listen(ctx context.Context) {
 		}
 
 		for _, e := range msg.Events {
-			if e.Kind == Dead {
+			switch e.Kind {
+			case Dead:
 				logger.Info("peer is dead", "peer", e.Node, "source", addr)
-				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: e.Node}})
+				m.deletePeer(e.Node)
 			}
 		}
 
@@ -386,13 +354,6 @@ func (m *Member) Listen(ctx context.Context) {
 	}
 }
 
-// Notifier is called by a Member when a peer's membership status changes. Notify is called in a
-// goroutine so implementations may block without affecting the probe loop. peer is the SWIM UDP
-// address as given in [Config].Peers (e.g. "node-1:7946"), not any application-layer address.
-type Notifier interface {
-	Notify(peer Peer, kind EventKind)
-}
-
 // Probe runs the failure detection loop: once per protocol period it picks a
 // random peer, sends a ping, and waits up to AckTimeout for a direct ack before
 // declaring the peer dead and removing it from the peer list.
@@ -403,7 +364,6 @@ func (m *Member) Probe(ctx context.Context) {
 	ackTimeout := time.NewTimer(m.ackTimeout)
 	defer ackTimeout.Stop()
 	noPeers := true
-	var cursor int
 
 	for {
 		if ctx.Err() != nil {
@@ -413,9 +373,8 @@ func (m *Member) Probe(ctx context.Context) {
 		periodTimer.Reset(m.protocolPeriod)
 		period := m.period.Add(1)
 
-		m.muPeers.Lock()
-		if len(m.peers) == 0 {
-			m.muPeers.Unlock()
+		peer, ok := m.peers.nextProbe()
+		if !ok {
 			logger.Warn("no peers to send ping to")
 			select {
 			case <-ctx.Done():
@@ -424,29 +383,15 @@ func (m *Member) Probe(ctx context.Context) {
 			}
 			continue
 		}
-		if cursor >= len(m.peers) {
-			cursor = 0
-			m.muRng.Lock()
-			for i := 1; i < len(m.peers); i++ {
-				j := m.rng.IntN(i + 1)
-				m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
-			}
-			m.muRng.Unlock()
-		}
-		peer := m.peers[cursor]
-		cursor++
-		m.muPeers.Unlock()
 		if noPeers {
 			noPeers = false
 			logger.Info("peers discovered, starting probe")
 		}
 
 		// direct ping
-		// TODO: send errors (currently only DNS resolution failures) are not fed into failure
+		// send errors (currently only DNS resolution failures) are not fed into failure
 		// detection. If send fails the peer stays alive and bootstrap retries until DNS
-		// stabilises. The consequence is that a peer whose DNS stops resolving permanently is
-		// never declared dead. Suspicion will fix this properly: a failed send will move the
-		// peer to Suspect with a timeout, allowing refutation before declaring it dead.
+		// stabilises. A peer whose DNS stops resolving permanently is never declared dead.
 		if err := m.send(ctx, peer, NewMessage(ping, m.UDPAddr(), period, "")); err != nil {
 			select {
 			case <-ctx.Done():
@@ -464,7 +409,7 @@ func (m *Member) Probe(ctx context.Context) {
 				return
 			case <-ackTimeout.C:
 				// indirect ping-req as we did not receive an ack to direct ping on time
-				indirects, ok := m.kRandomPeers(peer)
+				indirects, ok := m.peers.kRandomPeers(peer)
 				if !ok {
 					logger.Warn("no peers to send ping-req to")
 					continue
@@ -477,12 +422,13 @@ func (m *Member) Probe(ctx context.Context) {
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
 				logger.Info("peer is dead", "peer", peer.udpAddr, "period", period)
-				m.deletePeer(EventItem{Event: Event{Kind: Dead, Node: peer.udpAddr}})
+				m.deletePeer(peer.udpAddr)
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr == peer.udpAddr {
 					logger.Debug("peer is alive", "peer", peer.udpAddr, "period", period)
 					ackTimeout.Stop()
+
 					// wait for the period to expire before moving on to the next probe
 					select {
 					case <-ctx.Done():
@@ -494,118 +440,6 @@ func (m *Member) Probe(ctx context.Context) {
 			}
 		}
 	}
-}
-
-func (m *Member) kRandomPeers(target Peer) ([]Peer, bool) {
-	m.muPeers.RLock()
-	candidates := make([]Peer, 0, len(m.peers))
-	for _, p := range m.peers {
-		if p.udpAddr != target.udpAddr {
-			candidates = append(candidates, p)
-		}
-	}
-	m.muPeers.RUnlock()
-
-	if len(candidates) == 0 {
-		return nil, false
-	}
-
-	if len(candidates) <= m.subgroupSize {
-		return candidates, true
-	}
-
-	subgroup := make(map[string]Peer, m.subgroupSize)
-	m.muRng.Lock()
-	for range 3 * len(candidates) {
-		p := candidates[m.rng.IntN(len(candidates))]
-		if _, ok := subgroup[p.udpAddr]; ok {
-			continue
-		}
-		subgroup[p.udpAddr] = p
-		if len(subgroup) == m.subgroupSize {
-			break
-		}
-	}
-	m.muRng.Unlock()
-	return slices.Collect(maps.Values(subgroup)), true
-}
-
-func (m *Member) deletePeer(item EventItem) {
-	var newEvent bool
-	m.muPeers.Lock()
-	m.peers = slices.DeleteFunc(m.peers, func(p Peer) bool {
-		if p.udpAddr == item.Event.Node {
-			newEvent = true
-			return true
-		}
-		return false
-	})
-	m.deadPeers[item.Event.Node] = struct{}{}
-	m.muPeers.Unlock()
-
-	// Peer was already removed (e.g. dead event piggybacked while Probe was also declaring it
-	// dead). Skip enqueue and notification to avoid duplicate dissemination.
-	if !newEvent {
-		return
-	}
-
-	m.eventQueue.Push(item)
-	if m.notifier != nil {
-		go m.notifier.Notify(NewPeer(item.Event.Node), Dead)
-	}
-}
-
-// send delivers msg to peer by resolving its UDP address and writing the message.
-func (m *Member) send(ctx context.Context, peer Peer, msg Message) error {
-	addr, err := m.resolve(ctx, peer.udpAddr)
-	if err != nil {
-		m.logger.Error("failed to resolve address for peer", "peer", peer.udpAddr, "error", err)
-		return fmt.Errorf("failed to resolve address for peer %q", peer.udpAddr)
-	}
-	return m.sendToAddr(peer.udpAddr, addr, msg)
-}
-
-// sendToAddr delivers msg to peer and piggybacks pending membership events onto it.
-func (m *Member) sendToAddr(peer string, addr net.Addr, msg Message) error {
-	items := m.eventQueue.Pop(maxPiggybackEvents)
-	for _, item := range items {
-		msg.Events = append(msg.Events, item.Event)
-	}
-
-	err := m.writeMessage(peer, addr, msg)
-	if err != nil {
-		m.eventQueue.Push(items...)
-		return err
-	}
-
-	m.muPeers.RLock()
-	maxDisseminations := int(math.Ceil(float64(m.disseminationFactor) * math.Log2(float64(len(m.peers)+1))))
-	m.muPeers.RUnlock()
-	end := 0
-	for i := range len(items) {
-		items[i].SendCount++
-		if items[i].SendCount < maxDisseminations {
-			items[end] = items[i]
-			end++
-		}
-	}
-	m.eventQueue.Push(items[:end]...)
-
-	return nil
-}
-
-func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
-	b, err := msg.MarshalBinary()
-	if err != nil {
-		panic(err)
-	}
-	_, err = m.conn.WriteTo(b, addr)
-	if err != nil {
-		m.logger.Error("failed to send message", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target, "error", err)
-		return err
-	}
-	m.logger.Debug("sent message", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
-	return nil
 }
 
 // Bootstrap runs the seed join loop until ctx is cancelled. It contacts each configured seed over
@@ -622,9 +456,7 @@ func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
 // learning project.
 func (m *Member) Bootstrap(ctx context.Context) {
 	jitter := func(interval time.Duration) time.Duration {
-		m.muRng.Lock()
-		j := m.rng.Int64N(int64(min(interval/6, 5*time.Second)))
-		m.muRng.Unlock()
+		j := m.bootstrapRng.Int64N(int64(min(interval/6, 5*time.Second)))
 		return time.Duration(j)
 	}
 	interval := 5 * time.Second
@@ -641,20 +473,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 		}
 		logger := m.logger.With("loop", "bootstrap", "wait", waitDuration)
 
-		m.muPeers.RLock()
-		joinPeers := make([]joinPeer, len(m.peers)+1)
-		for i, p := range m.peers {
-			joinPeers[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
-		}
-		m.muPeers.RUnlock()
-		joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.appPort}
-		body, err := json.Marshal(joinBody{Peers: joinPeers})
+		body, err := json.Marshal(m.peers.asJoinBody(m.UDPAddr(), m.appPort))
 		if err != nil {
 			panic(err)
 		}
 
 		var seeds []string
-		var discovered []joinPeer
 		for _, seed := range m.seeds {
 			reqCtx, cancel := context.WithTimeout(ctx, joinTimeout)
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+seed+"/internal/swim/join", bytes.NewReader(body))
@@ -682,40 +506,12 @@ func (m *Member) Bootstrap(ctx context.Context) {
 				logger.Warn("failed to decode join response", "seed", seed, "error", err)
 				continue
 			}
-			discovered = append(discovered, joined.Peers...)
+			m.join(logger, joined)
+
 			seeds = append(seeds, seed)
 		}
 		if len(seeds) > 0 {
 			logger.Info("joined seeds", "seeds", seeds)
-		}
-
-		self := m.UDPAddr()
-		var added int
-		m.muPeers.Lock()
-		m.muRng.Lock()
-		for _, jp := range discovered {
-			if jp.UDPAddr == self {
-				continue
-			}
-			// A join is an explicit alive signal: remove from deadPeers so the peer can rejoin.
-			delete(m.deadPeers, jp.UDPAddr)
-			peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
-			if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
-				i := len(m.peers)
-				m.peers = append(m.peers, peer)
-				j := m.rng.IntN(len(m.peers))
-				m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
-				m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
-				if m.notifier != nil {
-					go m.notifier.Notify(peer, Alive)
-				}
-				added++
-			}
-		}
-		m.muRng.Unlock()
-		m.muPeers.Unlock()
-		if added > 0 {
-			logger.Info("added peers", "peers_added", added)
 		}
 
 		waitDuration = interval + jitter(interval)
@@ -726,20 +522,11 @@ func (m *Member) Bootstrap(ctx context.Context) {
 	}
 }
 
-type joinBody struct {
-	Src   string     `json:"src"`
-	Peers []joinPeer `json:"peers"`
-}
-
-type joinPeer struct {
-	UDPAddr  string `json:"udpAddr"`
-	HTTPPort uint16 `json:"httpPort"`
-}
-
 // JoinHandler returns an HTTP handler that accepts POST /internal/swim/join requests. The request
 // body must contain the caller's SWIM UDP address (host:port). The handler registers the caller as
 // a peer and responds with the node's current SWIM member list as a JSON array of addresses.
 func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
+	logger := m.logger.With("handler", "join")
 	if r.Body == nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -755,49 +542,277 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	m.join(logger, req)
 
-	m.muPeers.Lock()
-	m.muRng.Lock()
+	e := json.NewEncoder(w)
+	err = e.Encode(m.peers.asJoinBody(m.UDPAddr(), m.appPort))
+	if err != nil {
+		logger.Error("failed to encode peers", "error", err)
+	}
+}
+
+func (m *Member) join(logger *slog.Logger, req joinBody) {
+	added := m.peers.join(m.UDPAddr(), req)
+	if len(added) == 0 {
+		return
+	}
+	logger.Info("added peers", "handler", "join", "peers_added", len(added))
+	for _, p := range added {
+		m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p.UDPAddr()}})
+		if m.notifier != nil {
+			go m.notifier.Notify(p, Alive)
+		}
+	}
+}
+
+func (m *Member) deletePeer(peer string) {
+	// Peer was already removed (e.g. dead event piggybacked while Probe was also declaring it
+	// dead). Skip enqueue and notification to avoid duplicate dissemination.
+	if deleted := m.peers.delete(peer); !deleted {
+		return
+	}
+
+	m.eventQueue.Push(EventItem{Event: Event{Kind: Dead, Node: peer}})
+	if m.notifier != nil {
+		go m.notifier.Notify(NewPeer(peer), Dead)
+	}
+}
+
+// send delivers msg to peer by resolving its UDP address and writing the message.
+func (m *Member) send(ctx context.Context, peer Peer, msg Message) error {
+	addr, err := m.resolve(ctx, peer.udpAddr)
+	if err != nil {
+		m.logger.Error("failed to resolve address for peer", "peer", peer.udpAddr, "error", err)
+		return fmt.Errorf("failed to resolve address for peer %q", peer.udpAddr)
+	}
+	return m.sendToAddr(peer.udpAddr, addr, msg)
+}
+
+// sendToAddr delivers msg to peer and piggybacks pending membership events onto it.
+func (m *Member) sendToAddr(peer string, addr net.Addr, msg Message) error {
+	items := m.eventQueue.Pop(maxPiggybackEvents)
+	for _, item := range items {
+		msg.Events = append(msg.Events, item.Event)
+	}
+
+	err := m.writeMessage(peer, addr, msg)
+	if err != nil {
+		m.eventQueue.Push(items...)
+		return err
+	}
+
+	maxDisseminations := int(math.Ceil(float64(m.disseminationFactor) * math.Log2(float64(m.peers.len()+1))))
+	end := 0
+	for i := range len(items) {
+		items[i].SendCount++
+		if items[i].SendCount < maxDisseminations {
+			items[end] = items[i]
+			end++
+		}
+	}
+	m.eventQueue.Push(items[:end]...)
+
+	return nil
+}
+
+func (m *Member) writeMessage(peer string, addr net.Addr, msg Message) error {
+	b, err := msg.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+	_, err = m.conn.WriteTo(b, addr)
+	if err != nil {
+		m.logger.Error("failed to send message", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target, "error", err)
+		return err
+	}
+	m.logger.Debug("sent message", "peer", peer, "kind", msg.Kind, "period", msg.Period, "target", msg.Target)
+	return nil
+}
+
+// Peer is a SWIM group member. UDPAddr is an unresolved host:port string; DNS is resolved on every
+// send so membership changes propagate without restarting.
+type Peer struct {
+	udpAddr  string
+	httpPort uint16
+}
+
+// NewPeer creates a Peer with the given UDP address.
+func NewPeer(udpAddr string) Peer { return Peer{udpAddr: udpAddr} }
+
+// UDPAddr returns p's unresolved UDP address (host:port).
+func (p Peer) UDPAddr() string { return p.udpAddr }
+
+// HTTPPort returns p's HTTP port.
+func (p Peer) HTTPPort() uint16 { return p.httpPort }
+
+// WithHTTPPort returns a copy of p with the given HTTP port set.
+func (p Peer) WithHTTPPort(port uint16) Peer { p.httpPort = port; return p }
+
+// HTTPAddr returns p's unresolved HTTP address (host:port).
+func (p Peer) HTTPAddr() string {
+	host, _, _ := strings.Cut(p.udpAddr, ":")
+	return host + ":" + strconv.FormatUint(uint64(p.httpPort), 10)
+}
+
+type peers struct {
+	peers        []Peer
+	probeCursor  int
+	subgroupSize int
+	deadPeers    map[string]struct{} // keyed by UDP addr
+	mu           sync.RWMutex
+	rng          *rand.Rand
+}
+
+func newPeers(rng *rand.Rand, subgroupSize int) *peers {
+	return &peers{
+		subgroupSize: subgroupSize,
+		peers:        make([]Peer, 0),
+		deadPeers:    make(map[string]struct{}),
+		rng:          rng,
+	}
+}
+
+func (p *peers) len() int {
+	var n int
+	p.mu.RLock()
+	n = len(p.peers)
+	p.mu.RUnlock()
+	return n
+}
+
+// nextProbe returns the next peer to probe using round-robin selection over a shuffled list,
+// as described in SWIM paper Section 4.2. Returns false if there are no peers.
+func (p *peers) nextProbe() (Peer, bool) {
+	p.mu.Lock()
+	if len(p.peers) == 0 {
+		p.mu.Unlock()
+		return Peer{}, false
+	}
+
+	if p.probeCursor >= len(p.peers) {
+		p.probeCursor = 0
+		// Fisher-Yates shuffle; starts at index 1 to skip the trivial self-swap
+		for i := 1; i < len(p.peers); i++ {
+			j := p.rng.IntN(i + 1)
+			p.peers[i], p.peers[j] = p.peers[j], p.peers[i]
+		}
+	}
+	peer := p.peers[p.probeCursor]
+	p.probeCursor++
+	p.mu.Unlock()
+	return peer, true
+}
+
+func (p *peers) kRandomPeers(exclude Peer) ([]Peer, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	candidates := make([]Peer, 0, len(p.peers))
+	for _, p := range p.peers {
+		if p.udpAddr != exclude.udpAddr {
+			candidates = append(candidates, p)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	if len(candidates) <= p.subgroupSize {
+		return candidates, true
+	}
+
+	subgroup := make(map[string]Peer, p.subgroupSize)
+	for range 3 * len(candidates) {
+		peer := candidates[p.rng.IntN(len(candidates))]
+		if _, ok := subgroup[peer.udpAddr]; ok {
+			continue
+		}
+		subgroup[peer.udpAddr] = peer
+		if len(subgroup) == p.subgroupSize {
+			break
+		}
+	}
+	return slices.Collect(maps.Values(subgroup)), true
+}
+
+func (p *peers) asJoinBody(self string, appPort uint16) joinBody {
+	p.mu.RLock()
+	joinPeers := make([]joinPeer, len(p.peers)+1)
+	for i, p := range p.peers {
+		joinPeers[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
+	}
+	p.mu.RUnlock()
+	joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: self, HTTPPort: appPort}
+	return joinBody{Src: self, Peers: joinPeers}
+}
+
+func (p *peers) join(self string, body joinBody) []Peer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// The caller rejoining is a direct alive signal: remove it from deadPeers so it can
 	// re-enter the member list. Third-party peers pushed in req.Peers are hearsay and must
 	// not override local failure detection: a partitioned node could otherwise be resurrected
 	// by an outsider that has not yet learned about the failure.
-	delete(m.deadPeers, req.Src)
-	var added []string
-	for _, jp := range req.Peers {
-		if jp.UDPAddr == m.UDPAddr() {
+	delete(p.deadPeers, body.Src)
+
+	var added []Peer
+	for _, jp := range body.Peers {
+		if jp.UDPAddr == self {
 			continue
 		}
-		if _, ok := m.deadPeers[jp.UDPAddr]; ok {
+		if _, ok := p.deadPeers[jp.UDPAddr]; ok {
 			continue
 		}
 		peer := Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort}
-		if !slices.ContainsFunc(m.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
-			i := len(m.peers)
-			m.peers = append(m.peers, peer)
-			j := m.rng.IntN(len(m.peers))
-			m.peers[i], m.peers[j] = m.peers[j], m.peers[i]
-			m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: jp.UDPAddr}})
-			if m.notifier != nil {
-				go m.notifier.Notify(peer, Alive)
-			}
-			added = append(added, jp.UDPAddr)
+		if !slices.ContainsFunc(p.peers, func(q Peer) bool { return q.udpAddr == jp.UDPAddr }) {
+			i := len(p.peers)
+			p.peers = append(p.peers, peer)
+			j := p.rng.IntN(len(p.peers))
+			p.peers[i], p.peers[j] = p.peers[j], p.peers[i]
+			added = append(added, Peer{udpAddr: jp.UDPAddr, httpPort: jp.HTTPPort})
 		}
 	}
-	if len(added) > 0 {
-		m.logger.Info("added peers", "handler", "join", "peers_added", len(added))
-	}
-	result := make([]joinPeer, len(m.peers)+1)
-	for i, p := range m.peers {
-		result[i] = joinPeer{UDPAddr: p.udpAddr, HTTPPort: p.httpPort}
-	}
-	result[len(result)-1] = joinPeer{UDPAddr: m.UDPAddr(), HTTPPort: m.appPort}
-	m.muRng.Unlock()
-	m.muPeers.Unlock()
+	return added
+}
 
-	e := json.NewEncoder(w)
-	err = e.Encode(joinBody{Peers: result})
-	if err != nil {
-		m.logger.Error("failed to encode peers", "error", err)
-	}
+func (p *peers) delete(peer string) bool {
+	var deleted bool
+	p.mu.Lock()
+	p.peers = slices.DeleteFunc(p.peers, func(p Peer) bool {
+		if p.udpAddr == peer {
+			deleted = true
+			return true
+		}
+		return false
+	})
+	p.deadPeers[peer] = struct{}{}
+	p.mu.Unlock()
+	return deleted
+}
+
+// Ack is an acknowledgement received from a peer.
+type Ack struct {
+	Period uint64
+	Addr   string
+}
+
+// relayKey identifies a pending relay ack for a ping-req. Target is the address
+// of the node being pinged on behalf of the requester; Period is the initiator's
+// protocol period echoed in the ack. A struct key avoids ambiguity from string
+// concatenation (e.g. "1.2.3.4:56"+"78" vs "1.2.3.4:567"+"8").
+type relayKey struct {
+	target string
+	period uint64
+}
+
+type joinBody struct {
+	Src   string     `json:"src"`
+	Peers []joinPeer `json:"peers"`
+}
+
+type joinPeer struct {
+	UDPAddr  string `json:"udpAddr"`
+	HTTPPort uint16 `json:"httpPort"`
 }

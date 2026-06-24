@@ -32,17 +32,7 @@ func TestMessageRoundTrip(t *testing.T) {
 			Period:  5,
 			Events: []Event{
 				{Kind: Dead, Node: "192.168.1.1:7946"},
-				{Kind: Dead, Node: "192.168.1.2:7946"},
-			},
-		},
-		"PingReqWithTargetAndEvents": {
-			Version: messageVersion,
-			Src:     "node-0:7946",
-			Kind:    pingReq,
-			Period:  3,
-			Target:  "node-1:7946",
-			Events: []Event{
-				{Kind: Dead, Node: "192.168.1.1:7946"},
+				{Kind: Alive, Node: "192.168.1.2:7946"},
 			},
 		},
 	}

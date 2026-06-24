@@ -46,27 +46,27 @@ type Event struct {
 	Node string
 }
 
-func (e *Event) UnmarshalBinary(data []byte) error {
+func (e *Event) UnmarshalBinary(data []byte) (int, error) {
 	if len(data) < eventHeaderSize {
-		return fmt.Errorf("event too short: need at least %d bytes for header, got %d", eventHeaderSize, len(data))
+		return -1, fmt.Errorf("event too short: need at least %d bytes for header, got %d", eventHeaderSize, len(data))
 	}
 
 	kind := EventKind(data[0])
 	switch kind {
 	case Dead, Alive:
 	default:
-		return fmt.Errorf("unknown event kind: %d", data[0])
+		return -1, fmt.Errorf("unknown event kind: %d", data[0])
 	}
 
 	node, err := unmarshalString("node", int(data[1]), data[2:])
 	if err != nil {
-		return err
+		return -1, err
 	}
 
 	e.Kind = kind
 	e.Node = node
 
-	return nil
+	return eventHeaderSize + len(node), nil
 }
 
 // EventQueue is a concurrency-safe priority queue of membership events for

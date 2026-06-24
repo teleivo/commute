@@ -24,7 +24,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, 1)
 		network.registerAdvertiseHost(0, "machine-0")
-		rt := newJoinRoundTripper()
+		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
 			AdvertiseHost:  "machine-0",
@@ -64,7 +64,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
 		network := newNetwork(t, 1)
 		network.registerAdvertiseHost(0, "machine-0")
-		rt := newJoinRoundTripper()
+		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
 			AdvertiseHost:  "machine-0",
@@ -104,7 +104,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 		network := newNetwork(t, 2)
 		network.registerAdvertiseHost(0, "machine-0")
 		network.registerAdvertiseHost(1, "machine-1")
-		rt := newJoinRoundTripper()
+		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -175,7 +175,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 		network.registerAdvertiseHost(0, "machine-0")
 		network.registerAdvertiseHost(1, "machine-1")
 		network.registerAdvertiseHost(2, "machine-2")
-		rt := newJoinRoundTripper()
+		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -276,18 +276,20 @@ func TestBootstrapDeadPeerNotResurrectedByJoin(t *testing.T) {
 		// death then joins node-0 and pushes node-1 in its peer list.
 		// node-1 must not reappear in node-0's member list.
 		c := newCluster(t, 2)
-		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		c.start(ctx)
 
-		// Wait for node-0 to declare node-1 dead: one period for bootstrap to
-		// populate peers, then past the direct and indirect ack timeouts.
-		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		c.partition(1)
+
+		// Round-robin: node 1 is selected within 2(n-1)=2 periods.
+		time.Sleep(c.protocolPeriod * 2)
 		synctest.Wait()
 
-		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0))
+		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0), "node 0 must have declared node 1 dead before the join push")
 
 		// node-99 is an outsider that still thinks node-1 is alive and pushes
 		// it to node-0 in a join request.
@@ -306,17 +308,20 @@ func TestBootstrapDeadPeerRejoinsClearsDeadPeers(t *testing.T) {
 		// declares it dead. node-1 then directly rejoins node-0.
 		// node-1 must reappear in node-0's member list.
 		c := newCluster(t, 2)
-		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		c.start(ctx)
 
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		c.partition(1)
+
 		// Wait for node-0 to declare node-1 dead.
-		time.Sleep(c.protocolPeriod*3 + c.ackTimeout)
+		time.Sleep(c.protocolPeriod * 2)
 		synctest.Wait()
 
-		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0))
+		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0), "node 0 must have declared node 1 dead before the rejoin")
 
 		// node-1 directly rejoins node-0 with itself as Src.
 		members := joinMembers(t, c.members[0], c.addr(1))
@@ -364,28 +369,66 @@ func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []st
 // registered member's JoinHandler avoiding real network I/O so tests can run
 // inside a synctest bubble.
 type joinRoundTripper struct {
-	mu      sync.RWMutex
-	members map[string]*swim.Member // keyed by host:port seed address
+	network   *network
+	mu        sync.RWMutex
+	members   map[string]*swim.Member // keyed by host:port seed address
+	hostAddrs map[string]string       // seed address -> network hostAddr (node-N:port)
 }
 
-func newJoinRoundTripper() *joinRoundTripper {
-	return &joinRoundTripper{members: make(map[string]*swim.Member)}
+func newJoinRoundTripper(n *network) *joinRoundTripper {
+	return &joinRoundTripper{
+		network:   n,
+		members:   make(map[string]*swim.Member),
+		hostAddrs: make(map[string]string),
+	}
 }
 
-func (rt *joinRoundTripper) register(addr string, m *swim.Member) {
+// register maps addr (the seed address used in Config.Seeds) to m's JoinHandler.
+// hostAddr is the node's network address (node-N:port) used for isolation checks;
+// pass an empty string when the node is not subject to network isolation.
+func (rt *joinRoundTripper) register(addr string, m *swim.Member, hostAddr ...string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.members[addr] = m
+	if len(hostAddr) > 0 && hostAddr[0] != "" {
+		rt.hostAddrs[addr] = hostAddr[0]
+	}
 }
 
 func (rt *joinRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	rt.mu.RLock()
 	m, ok := rt.members[req.URL.Host]
+	targetHostAddr := rt.hostAddrs[req.URL.Host]
 	rt.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("no join handler registered for %q", req.URL.Host)
 	}
+	if targetHostAddr != "" {
+		rt.network.mu.Lock()
+		_, isolated := rt.network.isolated[targetHostAddr]
+		rt.network.mu.Unlock()
+		if isolated {
+			return nil, fmt.Errorf("node %q is isolated", targetHostAddr)
+		}
+	}
 	w := httptest.NewRecorder()
 	m.JoinHandler(w, req)
 	return w.Result(), nil
+}
+
+// nodeTransport wraps joinRoundTripper for a specific sender so outbound HTTP
+// requests from an isolated node are dropped just like its UDP packets.
+type nodeTransport struct {
+	rt       *joinRoundTripper
+	hostAddr string // node-N:port of the sender
+}
+
+func (t *nodeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.rt.network.mu.Lock()
+	_, isolated := t.rt.network.isolated[t.hostAddr]
+	t.rt.network.mu.Unlock()
+	if isolated {
+		return nil, fmt.Errorf("node %q is isolated", t.hostAddr)
+	}
+	return t.rt.RoundTrip(req)
 }

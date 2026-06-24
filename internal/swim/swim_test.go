@@ -123,10 +123,13 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		// 3 nodes: node 0 probes node 1, node 2 is the intermediary.
 		// node 1 is partitioned from node 0 but reachable from node 2.
 		c := newCluster(t, 3)
-		c.partitionBetween(0, 1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
+
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		c.partitionBetween(0, 1)
 
 		// Round-robin: node 1 is selected within 2(n-1)=4 periods. Once probed, the direct ack
 		// times out and the indirect ping via node 2 succeeds within the same period.
@@ -146,10 +149,13 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		// 3 nodes: node 0 probes node 1, node 2 is the intermediary.
 		// node 1 is partitioned from everyone so no path exists.
 		c := newCluster(t, 3)
-		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
+
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		c.partition(1)
 
 		// Round-robin: node 1 is selected within 2(n-1)=4 periods. Once probed, direct and indirect
 		// pings both time out within the same period. Node 0 and node 2 run concurrently so both
@@ -157,8 +163,8 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
-		assert.EqualValues(t, c.dead(2), []string{c.addr(1)}, "%v", []string{c.addr(0), c.addr(1), c.addr(2)})
+		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by all nodes %v", []string{c.addr(0), c.addr(1), c.addr(2)})
+		assert.EqualValues(t, c.dead(2), []string{c.addr(1)}, "node 1 must be declared dead by all nodes %v", []string{c.addr(0), c.addr(1), c.addr(2)})
 		cancel()
 	})
 }
@@ -167,18 +173,21 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 func TestProbeDirectFailPeerDead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 2)
-		// Drop node 1 from the network so it never replies to pings.
-		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
+
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		// Drop node 1 from the network so it never replies to pings.
+		c.partition(1)
 
 		// Round-robin: node 1 is selected within 2(n-1)=2 periods. The ack timeout and period
 		// expiry both fall within the same period, so 2 periods is sufficient.
 		time.Sleep(2 * c.protocolPeriod)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
+		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by node 0 %v", []string{c.addr(0), c.addr(1)})
 		cancel()
 	})
 }
@@ -188,17 +197,20 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 func TestProbeNoPeers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newCluster(t, 2)
-		c.partition(1)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		c.start(ctx)
+
+		// Let bootstrap complete so the cluster is formed before the partition.
+		synctest.Wait()
+		c.partition(1)
 
 		// Same detection bound as TestProbeDirectFailPeerDead, then extra periods to exercise the
 		// probe loop with an empty peer list.
 		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)})
+		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by node 0 %v", []string{c.addr(0), c.addr(1)})
 		cancel()
 	})
 }
@@ -231,7 +243,7 @@ func newCluster(t *testing.T, nodes int) *cluster {
 	for i := range nodes {
 		network.registerAdvertiseHost(i, machineID(i))
 	}
-	rt := newJoinRoundTripper()
+	rt := newJoinRoundTripper(network)
 	members := make([]*swim.Member, nodes)
 	for i := range nodes {
 		seeds := make([]string, 0, nodes-1)
@@ -252,14 +264,14 @@ func newCluster(t *testing.T, nodes int) *cluster {
 			SubgroupSize:   1,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
 			Notifier:       notifiers[i],
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{rt: rt, hostAddr: network.conns[i].hostAddr}},
 		}
 		m, err := swim.New(cfg)
 		require.NoError(t, err)
 		members[i] = m
 	}
 	for i, m := range members {
-		rt.register(fmt.Sprintf("node-%d:7947", i), m)
+		rt.register(fmt.Sprintf("node-%d:7947", i), m, network.conns[i].hostAddr)
 	}
 
 	return &cluster{
@@ -287,7 +299,8 @@ func (c *cluster) start(ctx context.Context) {
 	}
 }
 
-// partition drops node i from the network so it never receives or sends packets.
+// partition drops node i from the network so it never receives or sends UDP packets,
+// and blocks all HTTP so it cannot rejoin other nodes and other nodes cannot contact it.
 func (c *cluster) partition(i int) {
 	c.network.drop(i)
 }
@@ -312,7 +325,8 @@ type recordingNotifier struct {
 func (r *recordingNotifier) Notify(peer swim.Peer, kind swim.EventKind) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if kind == swim.Dead {
+	switch kind {
+	case swim.Dead:
 		r.deadPeers = append(r.deadPeers, peer.UDPAddr())
 	}
 }
