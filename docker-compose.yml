@@ -6,7 +6,7 @@ services:
       - -debug
       - -node-id=node-0
       - -addr=:8080
-      - -advertise-addr=node-0:8080
+      - -advertise-host=node-0
       - -swim-addr=:7946
       - -swim-join-addr=:7947
       - -swim-seeds=node-1:7947,node-2:7947
@@ -24,7 +24,7 @@ services:
       - -debug
       - -node-id=node-1
       - -addr=:8080
-      - -advertise-addr=node-1:8080
+      - -advertise-host=node-1
       - -swim-addr=:7946
       - -swim-join-addr=:7947
       - -swim-seeds=node-0:7947,node-2:7947
@@ -42,7 +42,7 @@ services:
       - -debug
       - -node-id=node-2
       - -addr=:8080
-      - -advertise-addr=node-2:8080
+      - -advertise-host=node-2
       - -swim-addr=:7946
       - -swim-join-addr=:7947
       - -swim-seeds=node-0:7947,node-1:7947

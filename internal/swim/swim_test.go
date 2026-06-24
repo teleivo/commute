@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,8 +20,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	network := newNetwork(t, 1)
-	network.registerAdvertiseHost(0, "7811223344aabb")
+	network := newNetwork(t, []string{"7811223344aabb"})
 	validConfig := swim.Config{
 		NodeID:         "node-0",
 		AdvertiseHost:  "7811223344aabb",
@@ -239,10 +239,11 @@ func newCluster(t *testing.T, nodes int) *cluster {
 		notifiers[i] = &recordingNotifier{}
 	}
 	machineID := func(i int) string { return fmt.Sprintf("machine-%d", i) }
-	network := newNetwork(t, nodes)
+	hosts := make([]string, nodes)
 	for i := range nodes {
-		network.registerAdvertiseHost(i, machineID(i))
+		hosts[i] = machineID(i)
 	}
+	network := newNetwork(t, hosts)
 	rt := newJoinRoundTripper(network)
 	members := make([]*swim.Member, nodes)
 	for i := range nodes {
@@ -313,7 +314,7 @@ func (c *cluster) partitionBetween(i, j int) {
 }
 
 func (c *cluster) addr(i int) string {
-	return c.network.addr(i)
+	return c.members[i].UDPAddr()
 }
 
 // recordingNotifier records Notify calls for use in assertions.
@@ -334,14 +335,13 @@ func (r *recordingNotifier) Notify(peer swim.Peer, kind swim.EventKind) {
 func (r *recordingNotifier) dead() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.deadPeers
+	return slices.Clone(r.deadPeers)
 }
 
-// network is an in-process packet network backed by channels.
-// Each node gets a real loopback address (127.0.0.1:N) so that
-// net.ResolveUDPAddr in Probe resolves to the same key used to route
-// packets. WriteTo delivers directly to the recipient's channel, making
-// ReadFrom durably blocking within a [testing/synctest] bubble.
+// network is an in-process packet network backed by channels. Each node gets a real loopback
+// address (127.0.0.1:N) so that net.ResolveUDPAddr in Probe resolves to the same key used to route
+// packets. WriteTo delivers directly to the recipient's channel, making ReadFrom durably blocking
+// within a [testing/synctest] bubble.
 type network struct {
 	mu       sync.Mutex
 	conns    []*conn
@@ -357,8 +357,9 @@ type packet struct {
 	from *net.UDPAddr
 }
 
-func newNetwork(t *testing.T, nodes int) *network {
+func newNetwork(t *testing.T, hosts []string) *network {
 	t.Helper()
+	nodes := len(hosts)
 	network := &network{
 		conns:    make([]*conn, nodes),
 		routes:   make(map[string]chan packet, nodes),
@@ -367,15 +368,10 @@ func newNetwork(t *testing.T, nodes int) *network {
 		blocked:  make(map[[2]string]struct{}),
 		isolated: make(map[string]struct{}),
 	}
-	for i := range nodes {
-		udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-		require.NoError(t, err)
-		// Listen then immediately close to grab a free port from the OS.
-		l, err := net.ListenUDP("udp", udpAddr)
-		require.NoError(t, err)
-		rawAddr := l.LocalAddr().(*net.UDPAddr)
-		require.NoError(t, l.Close())
-		hostAddr := fmt.Sprintf("node-%d:%d", i, rawAddr.Port)
+	for i, host := range hosts {
+		rawAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 7946 + i}
+		hostAddr := fmt.Sprintf("%s:%d", host, rawAddr.Port)
+		// buffered so send never blocks: a blocked channel send is not durably blocked under synctest
 		ch := make(chan packet, 16)
 		network.routes[rawAddr.String()] = ch
 		network.hostToIP[hostAddr] = rawAddr
@@ -387,27 +383,6 @@ func newNetwork(t *testing.T, nodes int) *network {
 
 func (n *network) conn(i int) *conn {
 	return n.conns[i]
-}
-
-// addr returns the advertise address for node i as seen by SWIM peers.
-func (n *network) addr(i int) string {
-	c := n.conns[i]
-	if c.advertiseAddr != "" {
-		return c.advertiseAddr
-	}
-	return c.hostAddr
-}
-
-// registerAdvertiseHost registers an additional hostname alias for node i so
-// that resolve can find it when AdvertiseHost differs from the default node-N name.
-func (n *network) registerAdvertiseHost(i int, host string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	c := n.conns[i]
-	addr := c.addr
-	advertiseAddr := fmt.Sprintf("%s:%d", host, addr.Port)
-	n.hostToIP[advertiseAddr] = addr
-	c.advertiseAddr = advertiseAddr
 }
 
 // resolve maps a "node-N:port" peer address to its underlying *net.UDPAddr.
@@ -465,12 +440,11 @@ func (n *network) send(toRaw string, from *conn, data []byte) {
 
 // conn implements [net.PacketConn] using the network.
 type conn struct {
-	network       *network
-	addr          *net.UDPAddr
-	hostAddr      string      // node-N:port, used for routing and blocking
-	advertiseAddr string      // advertiseHost:port, matches what swim.Member.UDPAddr() returns
-	ch            chan packet // own receive channel, stored directly for durable blocking under synctest
-	closed        atomic.Bool
+	network  *network
+	addr     *net.UDPAddr
+	hostAddr string      // host:port, used for routing and blocking
+	ch       chan packet // own receive channel, stored directly for durable blocking under synctest
+	closed   atomic.Bool
 }
 
 func (c *conn) ReadFrom(b []byte) (int, net.Addr, error) {

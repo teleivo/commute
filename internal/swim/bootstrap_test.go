@@ -22,8 +22,7 @@ import (
 // as a cluster of one when the seed list is empty.
 func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		network := newNetwork(t, 1)
-		network.registerAdvertiseHost(0, "machine-0")
+		network := newNetwork(t, []string{"machine-0"})
 		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -62,8 +61,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
-		network := newNetwork(t, 1)
-		network.registerAdvertiseHost(0, "machine-0")
+		network := newNetwork(t, []string{"machine-0"})
 		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -101,9 +99,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 // retries and adds a peer once its seed becomes reachable.
 func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		network := newNetwork(t, 2)
-		network.registerAdvertiseHost(0, "machine-0")
-		network.registerAdvertiseHost(1, "machine-1")
+		network := newNetwork(t, []string{"machine-0", "machine-1"})
 		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
@@ -160,7 +156,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 
 		members := joinMembers(t, m0, "node-99:7946")
 
-		assert.True(t, slices.Contains(members, network.addr(1)), "node-0 should have node-1 as peer after it becomes reachable")
+		assert.True(t, slices.Contains(members, m1.UDPAddr()), "node-0 should have node-1 as peer after it becomes reachable")
 	})
 }
 
@@ -171,10 +167,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 // node-2 via the pull response from node-1 (which seeds node-2 directly).
 func TestBootstrapJoinPushPull(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		network := newNetwork(t, 3)
-		network.registerAdvertiseHost(0, "machine-0")
-		network.registerAdvertiseHost(1, "machine-1")
-		network.registerAdvertiseHost(2, "machine-2")
+		network := newNetwork(t, []string{"machine-0", "machine-1", "machine-2"})
 		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
@@ -249,19 +242,19 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 
 		members0 := joinMembers(t, m0, "node-99:7946")
 
-		assert.True(t, slices.Contains(members0, network.addr(1)), "node-0 should have node-1 as peer")
-		assert.True(t, slices.Contains(members0, network.addr(2)), "node-0 should discover node-2 via pull from node-1")
+		assert.True(t, slices.Contains(members0, m1.UDPAddr()), "node-0 should have node-1 as peer")
+		assert.True(t, slices.Contains(members0, m2.UDPAddr()), "node-0 should discover node-2 via pull from node-1")
 
 		// node-1 has no seeds; it learns node-0 only via push from node-0's join request.
 		members1 := joinMembers(t, m1, "node-99:7946")
 
-		assert.True(t, slices.Contains(members1, network.addr(0)), "node-1 should learn node-0 via push")
-		assert.True(t, slices.Contains(members1, network.addr(2)), "node-1 should learn node-2 via push from node-2's join request")
+		assert.True(t, slices.Contains(members1, m0.UDPAddr()), "node-1 should learn node-0 via push")
+		assert.True(t, slices.Contains(members1, m2.UDPAddr()), "node-1 should learn node-2 via push from node-2's join request")
 		assert.True(t, slices.Contains(members1, "node-99:7946"), "node-99 should be registered as a peer")
 
 		members2 := joinMembers(t, m2, "node-99:7946")
 
-		assert.True(t, slices.Contains(members2, network.addr(1)), "node-2 should have node-1 as peer")
+		assert.True(t, slices.Contains(members2, m1.UDPAddr()), "node-2 should have node-1 as peer")
 		assert.True(t, slices.Contains(members2, "node-99:7946"), "node-99 should be registered as a peer")
 	})
 }

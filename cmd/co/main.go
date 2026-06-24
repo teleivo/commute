@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -118,8 +117,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		flags.PrintDefaults()
 	}
 	nodeID := flags.String("node-id", "", "unique node identifier (required)")
-	addr := flags.String("addr", ":0", "HTTP listen address for the API and gossip endpoint (e.g. :8080)")
-	advertiseAddr := flags.String("advertise-addr", "", "address peers use to reach this node (host:port)")
+	addr := flags.String("addr", ":0", "HTTP listen address for the KV API and CRDT state gossip (e.g. :8080)")
+	advertiseHost := flags.String("advertise-host", "", "hostname peers use to reach this node for all UDP and HTTP traffic")
 	gossipInterval := flags.Duration("gossip-interval", 5*time.Second, "how often to push state to a random peer")
 
 	swimAddr := flags.String("swim-addr", ":0", "UDP listen address for SWIM failure detection (e.g. :7946)")
@@ -149,16 +148,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	if _, _, err := net.SplitHostPort(*addr); err != nil {
 		return 2, fmt.Errorf("invalid addr %q: %s", *addr, err)
 	}
-	if *advertiseAddr == "" {
-		return 2, errors.New("advertise-addr is required")
-	}
-	advertiseHost, advertisePortStr, err := net.SplitHostPort(*advertiseAddr)
-	if err != nil {
-		return 2, fmt.Errorf("invalid advertise-addr %q: %s", *advertiseAddr, err)
-	}
-	advertisePort, err := strconv.ParseUint(advertisePortStr, 10, 16)
-	if err != nil {
-		return 2, fmt.Errorf("invalid port in advertise-addr %q: %s", *advertiseAddr, err)
+	if *advertiseHost == "" {
+		return 2, errors.New("advertise-host is required")
 	}
 	if _, _, err := net.SplitHostPort(*swimAddr); err != nil {
 		return 2, fmt.Errorf("invalid swim-addr %q: %s", *swimAddr, err)
@@ -181,10 +172,11 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		if err != nil {
 			return err
 		}
+		httpPort := ln.Addr().(*net.TCPAddr).Port
 		srv, err := server.New(server.Config{
 			NodeID:         *nodeID,
 			Listener:       ln,
-			AdvertiseAddr:  *advertiseAddr,
+			AdvertiseAddr:  fmt.Sprintf("%s:%d", *advertiseHost, httpPort),
 			GossipInterval: *gossipInterval,
 			Logger:         logger,
 		})
@@ -201,8 +193,8 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 		}
 		member, err := swim.New(swim.Config{
 			NodeID:              *nodeID,
-			AdvertiseHost:       advertiseHost,
-			AppPort:             uint16(advertisePort),
+			AdvertiseHost:       *advertiseHost,
+			AppPort:             uint16(httpPort),
 			Conn:                swimConn,
 			Listener:            lnSwim,
 			Seeds:               *swimSeeds,
