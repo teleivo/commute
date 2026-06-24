@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
 	"strings"
@@ -47,7 +48,6 @@ func newCluster(t *testing.T, nodes int) *cluster {
 		hosts[i] = machineID(i)
 	}
 	network := newNetwork(t, hosts)
-	rt := newJoinRoundTripper(network)
 	members := make([]*swim.Member, nodes)
 	for i := range nodes {
 		seeds := make([]string, 0, nodes-1)
@@ -56,7 +56,7 @@ func newCluster(t *testing.T, nodes int) *cluster {
 				seeds = append(seeds, fmt.Sprintf("node-%d:7947", j))
 			}
 		}
-		cfg := swim.Config{
+		m, err := swim.New(swim.Config{
 			NodeID:         fmt.Sprintf("node-%d", i),
 			AdvertiseHost:  machineID(i),
 			Conn:           network.conn(i),
@@ -68,14 +68,13 @@ func newCluster(t *testing.T, nodes int) *cluster {
 			SubgroupSize:   1,
 			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
 			Notifier:       notifiers[i],
-			HTTPClient:     &http.Client{Transport: &nodeTransport{rt: rt, hostAddr: network.conns[i].hostAddr}},
-		}
-		m, err := swim.New(cfg)
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[i].hostAddr}},
+		})
 		require.NoError(t, err)
 		members[i] = m
 	}
 	for i, m := range members {
-		rt.register(fmt.Sprintf("node-%d:7947", i), m, network.conns[i].hostAddr)
+		network.register(fmt.Sprintf("node-%d:7947", i), m, network.conns[i].hostAddr)
 	}
 
 	return &cluster{
@@ -141,17 +140,24 @@ func (r *recordingNotifier) dead() []string {
 	return slices.Clone(r.deadPeers)
 }
 
-// network is an in-process packet network backed by channels. Each node gets a synthetic loopback
-// address so that resolve can map host:port to *net.UDPAddr for routing. WriteTo delivers directly
-// to the recipient's channel, making ReadFrom durably blocking within a [testing/synctest] bubble.
+// network is an in-process network for testing. It handles UDP packet routing for SWIM failure
+// detection and HTTP join routing for SWIM bootstrap, with shared reachability controls.
 type network struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+
+	// UDP routing
 	conns    []*conn
-	routes   map[string]chan packet  // keyed by raw "IP:port"
+	routes   map[string]chan packet  // "IP:port" -> receive channel
 	hostToIP map[string]*net.UDPAddr // "host:port" -> *net.UDPAddr
-	ipToHost map[string]string       // raw "IP:port" -> "host:port"
-	blocked  map[[2]string]struct{}  // blocked[{from,to}] drops packets in that direction; keys are "host:port"
-	isolated map[string]struct{}     // isolated["host:port"] drops all packets to/from that node
+	ipToHost map[string]string       // "IP:port" -> "host:port"
+
+	// reachability: applies to both UDP and HTTP
+	blocked  map[[2]string]struct{} // blocked[{from,to}] silently drops traffic; keys are "host:port"
+	isolated map[string]struct{}    // isolated["host:port"] drops all traffic to/from that node
+
+	// HTTP join routing
+	members   map[string]*swim.Member // advertise addr -> member's JoinHandler
+	hostAddrs map[string]string       // advertise addr -> "host:port" for reachability checks
 }
 
 type packet struct {
@@ -163,12 +169,14 @@ func newNetwork(t *testing.T, hosts []string) *network {
 	t.Helper()
 	nodes := len(hosts)
 	network := &network{
-		conns:    make([]*conn, nodes),
-		routes:   make(map[string]chan packet, nodes),
-		hostToIP: make(map[string]*net.UDPAddr, nodes),
-		ipToHost: make(map[string]string, nodes),
-		blocked:  make(map[[2]string]struct{}),
-		isolated: make(map[string]struct{}),
+		conns:     make([]*conn, nodes),
+		routes:    make(map[string]chan packet, nodes),
+		hostToIP:  make(map[string]*net.UDPAddr, nodes),
+		ipToHost:  make(map[string]string, nodes),
+		blocked:   make(map[[2]string]struct{}),
+		isolated:  make(map[string]struct{}),
+		members:   make(map[string]*swim.Member),
+		hostAddrs: make(map[string]string),
 	}
 	for i, host := range hosts {
 		rawAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 7946 + i}
@@ -231,13 +239,60 @@ func (n *network) send(toRaw string, from *conn, data []byte) {
 	n.mu.Lock()
 	ch, ok := n.routes[toRaw]
 	toHost := n.ipToHost[toRaw]
-	_, isBlocked := n.blocked[[2]string{from.hostAddr, toHost}]
-	_, isIsolated := n.isolated[from.hostAddr]
+	reachable := n.reachable(from.hostAddr, toHost)
 	n.mu.Unlock()
-	if !ok || isBlocked || isIsolated {
+	if !ok || !reachable {
 		return // drop silently, like a real network
 	}
 	ch <- packet{data: data, from: from.addr}
+}
+
+// reachable reports whether traffic from fromHost to toHost should be delivered.
+// Must be called with n.mu held.
+func (n *network) reachable(fromHost, toHost string) bool {
+	_, fromIsolated := n.isolated[fromHost]
+	_, toIsolated := n.isolated[toHost]
+	_, blocked := n.blocked[[2]string{fromHost, toHost}]
+	return !fromIsolated && !toIsolated && !blocked
+}
+
+// register maps advertiseAddr to m's JoinHandler for in-process HTTP join routing.
+// hostAddr is the node's routing identity used for reachability checks.
+func (n *network) register(advertiseAddr string, m *swim.Member, hostAddr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.members[advertiseAddr] = m
+	n.hostAddrs[advertiseAddr] = hostAddr
+}
+
+// joinRoundTrip routes a POST /internal/swim/join request to the registered member's
+// JoinHandler, enforcing network reachability from fromHostAddr to the target.
+func (n *network) joinRoundTrip(fromHostAddr string, req *http.Request) (*http.Response, error) {
+	n.mu.Lock()
+	m, ok := n.members[req.URL.Host]
+	targetHostAddr := n.hostAddrs[req.URL.Host]
+	reachable := n.reachable(fromHostAddr, targetHostAddr)
+	n.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no join handler registered for %q", req.URL.Host)
+	}
+	if !reachable {
+		return nil, fmt.Errorf("node %q is unreachable", req.URL.Host)
+	}
+	w := httptest.NewRecorder()
+	m.JoinHandler(w, req)
+	return w.Result(), nil
+}
+
+// nodeTransport is an http.RoundTripper that routes join requests in-process via
+// the network, enforcing isolation and blocking for the sending node.
+type nodeTransport struct {
+	network  *network
+	hostAddr string // host:port of the sender
+}
+
+func (t *nodeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.network.joinRoundTrip(t.hostAddr, req)
 }
 
 // conn implements [net.PacketConn] using the network.

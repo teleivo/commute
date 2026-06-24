@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -23,7 +21,6 @@ import (
 func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0"})
-		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
 			AdvertiseHost:  "machine-0",
@@ -34,7 +31,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -62,7 +59,6 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
 		network := newNetwork(t, []string{"machine-0"})
-		rt := newJoinRoundTripper(network)
 		m, err := swim.New(swim.Config{
 			NodeID:         "node-0",
 			AdvertiseHost:  "machine-0",
@@ -73,7 +69,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -100,7 +96,6 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0", "machine-1"})
-		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -112,7 +107,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -126,7 +121,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -148,7 +143,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 		synctest.Wait()
 
 		// node-1's join handler becomes reachable.
-		rt.register("node-1:8080", m1)
+		network.register("node-1:8080", m1, network.conns[1].hostAddr)
 
 		// Bootstrap loop retries and join succeeds. First retry is after 5s so wait 6s.
 		time.Sleep(6 * time.Second)
@@ -168,7 +163,6 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 func TestBootstrapJoinPushPull(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0", "machine-1", "machine-2"})
-		rt := newJoinRoundTripper(network)
 
 		m0, err := swim.New(swim.Config{
 			NodeID:         "node-0",
@@ -180,7 +174,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -195,7 +189,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
 		})
 		require.NoError(t, err)
 
@@ -209,12 +203,12 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			ProtocolPeriod: 1 * time.Second,
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: rt},
+			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[2].hostAddr}},
 		})
 		require.NoError(t, err)
 
-		rt.register("node-1:8080", m1)
-		rt.register("node-2:8080", m2)
+		network.register("node-1:8080", m1, network.conns[1].hostAddr)
+		network.register("node-2:8080", m2, network.conns[2].hostAddr)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -358,70 +352,3 @@ func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []st
 	return addrs
 }
 
-// joinRoundTripper routes POST /internal/swim/join requests in-process to the
-// registered member's JoinHandler avoiding real network I/O so tests can run
-// inside a synctest bubble.
-type joinRoundTripper struct {
-	network   *network
-	mu        sync.RWMutex
-	members   map[string]*swim.Member // keyed by host:port seed address
-	hostAddrs map[string]string       // seed address -> network hostAddr (node-N:port)
-}
-
-func newJoinRoundTripper(n *network) *joinRoundTripper {
-	return &joinRoundTripper{
-		network:   n,
-		members:   make(map[string]*swim.Member),
-		hostAddrs: make(map[string]string),
-	}
-}
-
-// register maps addr (the seed address used in Config.Seeds) to m's JoinHandler.
-// hostAddr is the node's network address (node-N:port) used for isolation checks;
-// pass an empty string when the node is not subject to network isolation.
-func (rt *joinRoundTripper) register(addr string, m *swim.Member, hostAddr ...string) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	rt.members[addr] = m
-	if len(hostAddr) > 0 && hostAddr[0] != "" {
-		rt.hostAddrs[addr] = hostAddr[0]
-	}
-}
-
-func (rt *joinRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rt.mu.RLock()
-	m, ok := rt.members[req.URL.Host]
-	targetHostAddr := rt.hostAddrs[req.URL.Host]
-	rt.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("no join handler registered for %q", req.URL.Host)
-	}
-	if targetHostAddr != "" {
-		rt.network.mu.Lock()
-		_, isolated := rt.network.isolated[targetHostAddr]
-		rt.network.mu.Unlock()
-		if isolated {
-			return nil, fmt.Errorf("node %q is isolated", targetHostAddr)
-		}
-	}
-	w := httptest.NewRecorder()
-	m.JoinHandler(w, req)
-	return w.Result(), nil
-}
-
-// nodeTransport wraps joinRoundTripper for a specific sender so outbound HTTP
-// requests from an isolated node are dropped just like its UDP packets.
-type nodeTransport struct {
-	rt       *joinRoundTripper
-	hostAddr string // node-N:port of the sender
-}
-
-func (t *nodeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.rt.network.mu.Lock()
-	_, isolated := t.rt.network.isolated[t.hostAddr]
-	t.rt.network.mu.Unlock()
-	if isolated {
-		return nil, fmt.Errorf("node %q is isolated", t.hostAddr)
-	}
-	return t.rt.RoundTrip(req)
-}
