@@ -15,8 +15,9 @@ import (
 
 func TestEventUnmarshalBinaryRoundTrip(t *testing.T) {
 	tests := map[string]Event{
-		"Dead":  {Kind: Dead, Node: "192.168.1.1:7946"},
-		"Alive": {Kind: Alive, Node: "192.168.1.2:7946"},
+		"Dead":    {Kind: Dead, Incarnation: 0, Node: "192.168.1.1:7946"},
+		"Alive":   {Kind: Alive, Incarnation: 5, Node: "192.168.1.2:7946"},
+		"Suspect": {Kind: Suspect, Incarnation: 3, Node: "192.168.1.3:7946"},
 	}
 
 	for name, want := range tests {

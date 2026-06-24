@@ -42,6 +42,7 @@ type Member struct {
 
 	protocolPeriod      time.Duration
 	ackTimeout          time.Duration
+	suspicionTimeout    time.Duration
 	subgroupSize        int
 	disseminationFactor int
 	period              atomic.Uint64
@@ -68,6 +69,7 @@ type Config struct {
 
 	ProtocolPeriod      time.Duration // T' in the paper: duration of one failure detection round
 	AckTimeout          time.Duration // how long to wait for a direct ack before sending indirect ping-reqs
+	SuspicionTimeout    time.Duration // how long a suspected peer has to refute before being declared dead
 	SubgroupSize        int           // k in the paper: number of members used for indirect probing
 	DisseminationFactor int           // multiplier for membership event dissemination count; events are piggybacked DisseminationFactor·log(N) times (SWIM paper Section 4.1)
 
@@ -141,6 +143,9 @@ func New(cfg Config) (*Member, error) {
 	if cfg.AckTimeout >= cfg.ProtocolPeriod {
 		return nil, errors.New("ack timeout must be less than protocol period")
 	}
+	if cfg.SuspicionTimeout <= 0 {
+		return nil, errors.New("suspicion timeout must be greater than zero")
+	}
 	if cfg.SubgroupSize <= 0 {
 		return nil, errors.New("subgroup size must be greater than zero")
 	}
@@ -192,6 +197,7 @@ func New(cfg Config) (*Member, error) {
 		peers:               newPeers(rng, cfg.SubgroupSize),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
+		suspicionTimeout:    cfg.SuspicionTimeout,
 		subgroupSize:        cfg.SubgroupSize,
 		disseminationFactor: disseminationFactor,
 		bootstrapRng:        bootstrapRng,
