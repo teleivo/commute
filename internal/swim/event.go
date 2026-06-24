@@ -2,12 +2,13 @@ package swim
 
 import (
 	"container/heap"
+	"encoding/binary"
 	"fmt"
 	"sync"
 )
 
 const (
-	eventHeaderSize = 2                               // 1 (Kind) + 1 (NodeLen)
+	eventHeaderSize = 10                              // 1 (Kind) + 8 (Incarnation) + 1 (NodeLen)
 	maxEventSize    = eventHeaderSize + maxTargetSize // worst-case event: max-length node address
 
 	// 576 is the conservative IPv4 minimum reassembly buffer ([RFC 791]); minus IP header (20 bytes)
@@ -25,16 +26,19 @@ const (
 type EventKind uint8
 
 const (
-	Dead EventKind = iota
-	Alive
+	Alive EventKind = iota
+	Suspect
+	Dead
 )
 
 func (e EventKind) String() string {
 	switch e {
-	case Dead:
-		return "dead"
 	case Alive:
 		return "alive"
+	case Suspect:
+		return "suspect"
+	case Dead:
+		return "dead"
 	default:
 		panic(fmt.Sprintf("unknown EventKind %d", uint8(e)))
 	}
@@ -42,8 +46,9 @@ func (e EventKind) String() string {
 
 // Event is a membership change in the SWIM group.
 type Event struct {
-	Kind EventKind
-	Node string
+	Kind        EventKind
+	Incarnation uint64
+	Node        string
 }
 
 func (e *Event) UnmarshalBinary(data []byte) (int, error) {
@@ -53,17 +58,21 @@ func (e *Event) UnmarshalBinary(data []byte) (int, error) {
 
 	kind := EventKind(data[0])
 	switch kind {
-	case Dead, Alive:
+	case Alive, Suspect, Dead:
 	default:
 		return -1, fmt.Errorf("unknown event kind: %d", data[0])
 	}
 
-	node, err := unmarshalString("node", int(data[1]), data[2:])
+	incarnation := binary.BigEndian.Uint64(data[1:])
+	data = data[9:]
+
+	node, err := unmarshalString("node", int(data[0]), data[1:])
 	if err != nil {
 		return -1, err
 	}
 
 	e.Kind = kind
+	e.Incarnation = incarnation
 	e.Node = node
 
 	return eventHeaderSize + len(node), nil

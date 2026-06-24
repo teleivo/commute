@@ -13,15 +13,16 @@ import (
 func TestNew(t *testing.T) {
 	network := newNetwork(t, []string{"7811223344aabb"})
 	validConfig := swim.Config{
-		NodeID:         "node-0",
-		AdvertiseHost:  "7811223344aabb",
-		Conn:           network.conn(0),
-		Listener:       newFakeListener(),
-		Resolve:        network.resolve,
-		ProtocolPeriod: 1 * time.Second,
-		AckTimeout:     500 * time.Millisecond,
-		SubgroupSize:   3,
-		Notifier:       noopNotifier{},
+		NodeID:           "node-0",
+		AdvertiseHost:    "7811223344aabb",
+		Conn:             network.conn(0),
+		Listener:         newFakeListener(),
+		Resolve:          network.resolve,
+		ProtocolPeriod:   1 * time.Second,
+		AckTimeout:       500 * time.Millisecond,
+		SuspicionTimeout: 4 * time.Second,
+		SubgroupSize:     3,
+		Notifier:         noopNotifier{},
 	}
 
 	tests := map[string]struct {
@@ -69,6 +70,10 @@ func TestNew(t *testing.T) {
 		},
 		"AckTimeoutGreaterThanProtocolPeriod": {
 			cfg:     func() swim.Config { c := validConfig; c.AckTimeout = c.ProtocolPeriod + 1; return c }(),
+			wantErr: true,
+		},
+		"ZeroSuspicionTimeout": {
+			cfg:     func() swim.Config { c := validConfig; c.SuspicionTimeout = 0; return c }(),
 			wantErr: true,
 		},
 		"ZeroSubgroupSize": {
@@ -181,6 +186,9 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		cancel()
 	})
 }
+
+// TODO add test to refute
+// TODO how to test incarnation number logic
 
 // TestProbeDirectFailPeerDead verifies that a peer that never replies is declared dead.
 func TestProbeDirectFailPeerDead(t *testing.T) {

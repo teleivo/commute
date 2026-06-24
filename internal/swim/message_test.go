@@ -31,8 +31,19 @@ func TestMessageRoundTrip(t *testing.T) {
 			Kind:    ping,
 			Period:  5,
 			Events: []Event{
-				{Kind: Dead, Node: "192.168.1.1:7946"},
-				{Kind: Alive, Node: "192.168.1.2:7946"},
+				{Kind: Dead, Incarnation: 3, Node: "192.168.1.1:7946"},
+				{Kind: Alive, Incarnation: 7, Node: "192.168.1.2:7946"},
+				{Kind: Suspect, Incarnation: 1, Node: "192.168.1.3:7946"},
+			},
+		},
+		"PingReqWithTargetAndEvents": {
+			Version: messageVersion,
+			Src:     "node-0:7946",
+			Kind:    pingReq,
+			Period:  3,
+			Target:  "node-1:7946",
+			Events: []Event{
+				{Kind: Suspect, Incarnation: 2, Node: "192.168.1.1:7946"},
 			},
 		},
 	}
@@ -157,8 +168,8 @@ func TestMessageUnmarshalBinaryError(t *testing.T) {
 					Events:  []Event{{Kind: Dead, Node: "192.168.1.1:7946"}},
 				}
 				b, _ := msg.MarshalBinary()
-				// locate the event's NodeLen byte: past Version+SrcLen+Src+Kind+Period+TargetLen+Target+EventCount+event Kind
-				eventNodeLenOffset := 2 + len(src) + 10 + 1 + 1
+				// locate the event's NodeLen byte: past Version+SrcLen+Src+Kind+Period+TargetLen+Target+EventCount+event Kind+event Incarnation
+				eventNodeLenOffset := 2 + len(src) + 10 + 1 + 1 + 8
 				b[eventNodeLenOffset] = b[eventNodeLenOffset] + 10 // claim 10 more bytes than present
 				// recompute checksum
 				h := crc32.NewIEEE()

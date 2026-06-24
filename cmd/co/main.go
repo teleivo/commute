@@ -126,6 +126,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 	swimSeeds := flags.String("swim-seeds", "", "comma-separated list of seed HTTP addresses for bootstrap (e.g. host1:7947,host2:7947)")
 	swimProtocolPeriod := flags.Duration("swim-protocol-period", 2*time.Second, "SWIM protocol period")
 	swimAckTimeout := flags.Duration("swim-ack-timeout", 500*time.Millisecond, "direct ack wait duration before probing indirectly")
+	swimSuspicionTimeout := flags.Duration("swim-suspicion-timeout", 4*time.Second, "how long a suspected peer has to refute before being declared dead")
 	swimSubgroupSize := flags.Int("swim-subgroup-size", 3, "number of nodes used for indirect probing")
 	swimDisseminationFactor := flags.Int("swim-dissemination-factor", 3, "multiplier for membership event dissemination count; events are piggybacked disseminationFactor·log(N) times")
 
@@ -200,6 +201,7 @@ func runServer(args []string, wErr io.Writer) (int, error) {
 			Seeds:               *swimSeeds,
 			ProtocolPeriod:      *swimProtocolPeriod,
 			AckTimeout:          *swimAckTimeout,
+			SuspicionTimeout:    *swimSuspicionTimeout,
 			SubgroupSize:        *swimSubgroupSize,
 			DisseminationFactor: *swimDisseminationFactor,
 			Notifier:            srv,

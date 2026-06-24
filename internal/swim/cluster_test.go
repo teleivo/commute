@@ -24,20 +24,22 @@ import (
 // cluster manages a group of swim.Members for testing.
 // Every node is instrumented with a [recordingNotifier].
 type cluster struct {
-	t              *testing.T
-	members        []*swim.Member
-	network        *network
-	notifiers      []*recordingNotifier
-	protocolPeriod time.Duration
-	ackTimeout     time.Duration
+	t                *testing.T
+	members          []*swim.Member
+	network          *network
+	notifiers        []*recordingNotifier
+	protocolPeriod   time.Duration
+	ackTimeout       time.Duration
+	suspicionTimeout time.Duration
 }
 
 func newCluster(t *testing.T, nodes int) *cluster {
 	t.Helper()
 
 	const (
-		protocolPeriod = 1 * time.Second
-		ackTimeout     = 500 * time.Millisecond
+		protocolPeriod   = 1 * time.Second
+		ackTimeout       = 500 * time.Millisecond
+		suspicionTimeout = 4 * time.Second
 	)
 
 	notifiers := make([]*recordingNotifier, nodes)
@@ -59,18 +61,19 @@ func newCluster(t *testing.T, nodes int) *cluster {
 			}
 		}
 		m, err := swim.New(swim.Config{
-			NodeID:         fmt.Sprintf("node-%d", i),
-			AdvertiseHost:  machineID(i),
-			Conn:           network.conn(i),
-			Listener:       newFakeListener(),
-			Seeds:          strings.Join(seeds, ","),
-			Resolve:        network.resolve,
-			ProtocolPeriod: protocolPeriod,
-			AckTimeout:     ackTimeout,
-			SubgroupSize:   1,
-			Rng:            rand.New(rand.NewPCG(uint64(i), 0)),
-			Notifier:       notifiers[i],
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[i].hostAddr}},
+			NodeID:           fmt.Sprintf("node-%d", i),
+			AdvertiseHost:    machineID(i),
+			Conn:             network.conn(i),
+			Listener:         newFakeListener(),
+			Seeds:            strings.Join(seeds, ","),
+			Resolve:          network.resolve,
+			ProtocolPeriod:   protocolPeriod,
+			AckTimeout:       ackTimeout,
+			SuspicionTimeout: suspicionTimeout,
+			SubgroupSize:     1,
+			Rng:              rand.New(rand.NewPCG(uint64(i), 0)),
+			Notifier:         notifiers[i],
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[i].hostAddr}},
 		})
 		require.NoError(t, err)
 		members[i] = m
@@ -80,12 +83,13 @@ func newCluster(t *testing.T, nodes int) *cluster {
 	}
 
 	return &cluster{
-		t:              t,
-		members:        members,
-		network:        network,
-		notifiers:      notifiers,
-		protocolPeriod: protocolPeriod,
-		ackTimeout:     ackTimeout,
+		t:                t,
+		members:          members,
+		network:          network,
+		notifiers:        notifiers,
+		protocolPeriod:   protocolPeriod,
+		ackTimeout:       ackTimeout,
+		suspicionTimeout: suspicionTimeout,
 	}
 }
 

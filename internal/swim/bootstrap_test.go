@@ -22,17 +22,18 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0"})
 		m, err := swim.New(swim.Config{
-			NodeID:         "node-0",
-			AdvertiseHost:  "machine-0",
-			Conn:           network.conn(0),
-			Listener:       newFakeListener(),
-			Seeds:          "",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-0",
+			AdvertiseHost:    "machine-0",
+			Conn:             network.conn(0),
+			Listener:         newFakeListener(),
+			Seeds:            "",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -61,17 +62,18 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
 		network := newNetwork(t, []string{"machine-0"})
 		m, err := swim.New(swim.Config{
-			NodeID:         "node-0",
-			AdvertiseHost:  "machine-0",
-			Conn:           network.conn(0),
-			Listener:       newFakeListener(),
-			Seeds:          "node-1:8080",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-0",
+			AdvertiseHost:    "machine-0",
+			Conn:             network.conn(0),
+			Listener:         newFakeListener(),
+			Seeds:            "node-1:8080",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -100,32 +102,34 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0", "machine-1"})
 
 		m0, err := swim.New(swim.Config{
-			NodeID:         "node-0",
-			AdvertiseHost:  "machine-0",
-			Conn:           network.conn(0),
-			Listener:       newFakeListener(),
-			Seeds:          "node-1:8080",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-0",
+			AdvertiseHost:    "machine-0",
+			Conn:             network.conn(0),
+			Listener:         newFakeListener(),
+			Seeds:            "node-1:8080",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
 		m1, err := swim.New(swim.Config{
-			NodeID:         "node-1",
-			AdvertiseHost:  "machine-1",
-			Conn:           network.conn(1),
-			Listener:       newFakeListener(),
-			Seeds:          "",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-1",
+			AdvertiseHost:    "machine-1",
+			Conn:             network.conn(1),
+			Listener:         newFakeListener(),
+			Seeds:            "",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -169,48 +173,51 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0", "machine-1", "machine-2"})
 
 		m0, err := swim.New(swim.Config{
-			NodeID:         "node-0",
-			AdvertiseHost:  "machine-0",
-			Conn:           network.conn(0),
-			Listener:       newFakeListener(),
-			Seeds:          "node-1:8080",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-0",
+			AdvertiseHost:    "machine-0",
+			Conn:             network.conn(0),
+			Listener:         newFakeListener(),
+			Seeds:            "node-1:8080",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
 		// node-1 has no seeds: it can only learn node-0 via push from node-0's join request.
 		m1, err := swim.New(swim.Config{
-			NodeID:         "node-1",
-			AdvertiseHost:  "machine-1",
-			Conn:           network.conn(1),
-			Listener:       newFakeListener(),
-			Seeds:          "",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-1",
+			AdvertiseHost:    "machine-1",
+			Conn:             network.conn(1),
+			Listener:         newFakeListener(),
+			Seeds:            "",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 
 		m2, err := swim.New(swim.Config{
-			NodeID:         "node-2",
-			AdvertiseHost:  "machine-2",
-			Conn:           network.conn(2),
-			Listener:       newFakeListener(),
-			Seeds:          "node-1:8080",
-			Resolve:        network.resolve,
-			ProtocolPeriod: 1 * time.Second,
-			AckTimeout:     500 * time.Millisecond,
-			SubgroupSize:   1,
-			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[2].hostAddr}},
-			Notifier:       noopNotifier{},
+			NodeID:           "node-2",
+			AdvertiseHost:    "machine-2",
+			Conn:             network.conn(2),
+			Listener:         newFakeListener(),
+			Seeds:            "node-1:8080",
+			Resolve:          network.resolve,
+			ProtocolPeriod:   1 * time.Second,
+			AckTimeout:       500 * time.Millisecond,
+			SuspicionTimeout: 4 * time.Second,
+			SubgroupSize:     1,
+			HTTPClient:       &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[2].hostAddr}},
+			Notifier:         noopNotifier{},
 		})
 		require.NoError(t, err)
 

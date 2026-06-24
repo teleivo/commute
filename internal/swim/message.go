@@ -90,7 +90,8 @@ func (m *Message) MarshalBinary() (data []byte, err error) {
 	events = events[1:]
 	for _, e := range m.Events {
 		events[0] = uint8(e.Kind)
-		events[1] = uint8(len(e.Node))
+		binary.BigEndian.PutUint64(events[1:], e.Incarnation)
+		events[9] = uint8(len(e.Node))
 		copy(events[eventHeaderSize:], e.Node)
 		events = events[eventHeaderSize+len(e.Node):]
 	}
