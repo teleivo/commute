@@ -2,6 +2,8 @@
 
 ## SWIM
 
+* Should I rather pass in rand.Source instead of rand.Rng?
+
 * Rethink ports and the swim/server relationship. Currently `AppPort` in `swim.Config` leaks an
   application-layer concern (the HTTP API port) into the SWIM layer. Consul/memberlist solve this
   cleanly via an opaque `Meta []byte` blob that the application embeds in every membership message
@@ -50,6 +52,8 @@
 
 * Implement SWIM++ suspicion and refutation (incarnation numbers, Suspect state, alive refutation)
   * validation of suspicion timeout > protocol period?
+  * test: node transitions Alive → Suspect → Dead (no refutation, suspicion timeout fires)
+  * test: node transitions Alive → Suspect → Alive → Suspect → Dead (refutes once, suspected again, dies)
 * dynamic join: bootstrap (new node announces itself to at least one known peer) and crash recovery
   gap (peers hold stale ack sequences; need sequence regression detection to fall back to full state);
   also fixes the cold-start race where a peer probed before it is reachable is permanently dropped

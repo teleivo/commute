@@ -276,14 +276,15 @@ func TestBootstrapDeadPeerNotResurrectedByJoin(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 2)
 		synctest.Wait()
 
-		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0), "node 0 must have declared node 1 dead before the join push")
+		// node 0 must have declared node 1 dead before the join push
+		c.assertFinalState(0, 1, swim.Dead)
 
 		// node-99 is an outsider that still thinks node-1 is alive and pushes
 		// it to node-0 in a join request.
-		members := joinMembers(t, c.members[0], "node-99:7946", c.addr(1))
+		members := joinMembers(t, c.members[0], "node-99:7946", c.udpAddr(1))
 
 		assert.True(t, slices.Contains(members, "node-99:7946"), "node-99 should be registered as a peer")
-		assert.False(t, slices.Contains(members, c.addr(1)), "dead node-1 must not be resurrected by a join push")
+		assert.False(t, slices.Contains(members, c.udpAddr(1)), "dead node-1 must not be resurrected by a join push")
 	})
 }
 
@@ -308,12 +309,13 @@ func TestBootstrapDeadPeerRejoinsClearsDeadPeers(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 2)
 		synctest.Wait()
 
-		assert.EqualValues(t, []string{c.addr(1)}, c.dead(0), "node 0 must have declared node 1 dead before the rejoin")
+		// node 0 must have declared node 1 dead before the rejoin
+		c.assertFinalState(0, 1, swim.Dead)
 
 		// node-1 directly rejoins node-0 with itself as Src.
-		members := joinMembers(t, c.members[0], c.addr(1))
+		members := joinMembers(t, c.members[0], c.udpAddr(1))
 
-		assert.True(t, slices.Contains(members, c.addr(1)), "rejoining node-1 must be re-added to node-0's member list")
+		assert.True(t, slices.Contains(members, c.udpAddr(1)), "rejoining node-1 must be re-added to node-0's member list")
 	})
 }
 
@@ -351,4 +353,3 @@ func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []st
 	}
 	return addrs
 }
-

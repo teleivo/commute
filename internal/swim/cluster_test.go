@@ -3,6 +3,7 @@ package swim_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/teleivo/assertive/assert"
 	"github.com/teleivo/assertive/require"
 	"github.com/teleivo/commute/internal/swim"
 )
@@ -40,7 +42,7 @@ func newCluster(t *testing.T, nodes int) *cluster {
 
 	notifiers := make([]*recordingNotifier, nodes)
 	for i := range nodes {
-		notifiers[i] = &recordingNotifier{}
+		notifiers[i] = &recordingNotifier{events: make(map[string][]swim.EventKind)}
 	}
 	machineID := func(i int) string { return fmt.Sprintf("machine-%d", i) }
 	hosts := make([]string, nodes)
@@ -111,33 +113,67 @@ func (c *cluster) partitionBetween(i, j int) {
 	c.network.block(j, i)
 }
 
-func (c *cluster) addr(i int) string {
+func (c *cluster) udpAddr(i int) string {
 	return c.members[i].UDPAddr()
 }
 
-func (c *cluster) dead(i int) []string {
-	return c.notifiers[i].dead()
+func (c *cluster) udpAddrs() []string {
+	var result []string
+	for _, m := range c.members {
+		result = append(result, m.UDPAddr())
+	}
+	return result
+}
+
+// events are membership events observed in that order for a given node.
+type events map[int][]swim.EventKind
+
+// assertEvents asserts the events observed at given node.
+func (c *cluster) assertEvents(node int, want events) {
+	c.t.Helper()
+	assert.EqualValues(c.t, c.events(node), want, "membership events observed by node %d do not match", node)
+}
+
+// assertFinalState asserts the final observed state of target at observer.
+func (c *cluster) assertFinalState(observer, target int, kind swim.EventKind) {
+	c.t.Helper()
+	events, ok := c.events(observer)[target]
+	require.True(c.t, ok, "node %d has no events for node %d", observer, target)
+	got := events[len(events)-1]
+	assert.EqualValues(c.t, got, kind, "node %d observed final state of node %d as %s, want %s", observer, target, got, kind)
+}
+
+func (c *cluster) events(i int) events {
+	require.True(c.t, i >= 0 && i < len(c.notifiers), "node %d out of range, cluster has %d nodes", i, len(c.notifiers))
+	result := make(map[int][]swim.EventKind, len(c.notifiers[i].getEvents()))
+	for k, v := range c.notifiers[i].getEvents() {
+		j := slices.IndexFunc(c.members, func(m *swim.Member) bool {
+			return k == m.UDPAddr()
+		})
+		if j == -1 {
+			c.t.Fatalf("event references unknown UDP address %q, not in cluster %v", k, c.udpAddrs())
+		}
+		result[j] = v
+	}
+	return result
 }
 
 // recordingNotifier records Notify calls for use in assertions.
 type recordingNotifier struct {
-	mu        sync.Mutex
-	deadPeers []string
+	mu     sync.Mutex
+	events map[string][]swim.EventKind
 }
 
 func (r *recordingNotifier) Notify(peer swim.Peer, kind swim.EventKind) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	switch kind {
-	case swim.Dead:
-		r.deadPeers = append(r.deadPeers, peer.UDPAddr())
-	}
+	r.events[peer.UDPAddr()] = append(r.events[peer.UDPAddr()], kind)
 }
 
-func (r *recordingNotifier) dead() []string {
+func (r *recordingNotifier) getEvents() map[string][]swim.EventKind {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.deadPeers)
+	return maps.Clone(r.events)
 }
 
 // network is an in-process network for testing. It handles UDP packet routing for SWIM failure

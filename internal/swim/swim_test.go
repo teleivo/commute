@@ -102,7 +102,8 @@ func TestProbeDirectSuccess(t *testing.T) {
 		time.Sleep(2 * c.protocolPeriod)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string(nil))
+		c.assertFinalState(0, 1, swim.Alive)
+		c.assertFinalState(1, 0, swim.Alive)
 		cancel()
 	})
 }
@@ -127,8 +128,8 @@ func TestProbeIndirectSuccess(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string(nil))
-		assert.EqualValues(t, c.dead(2), []string(nil))
+		c.assertFinalState(0, 1, swim.Alive)
+		c.assertFinalState(2, 1, swim.Alive)
 		cancel()
 	})
 }
@@ -154,8 +155,24 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by all nodes %v", []string{c.addr(0), c.addr(1), c.addr(2)})
-		assert.EqualValues(t, c.dead(2), []string{c.addr(1)}, "node 1 must be declared dead by all nodes %v", []string{c.addr(0), c.addr(1), c.addr(2)})
+		c.assertEvents(0,
+			events{
+				1: {swim.Alive, swim.Dead},
+				2: {swim.Alive},
+			},
+		)
+		c.assertEvents(1,
+			events{
+				0: {swim.Alive, swim.Dead},
+				2: {swim.Alive, swim.Dead},
+			},
+		)
+		c.assertEvents(2,
+			events{
+				0: {swim.Alive},
+				1: {swim.Alive, swim.Dead},
+			},
+		)
 		cancel()
 	})
 }
@@ -178,7 +195,16 @@ func TestProbeDirectFailPeerDead(t *testing.T) {
 		time.Sleep(2 * c.protocolPeriod)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by node 0 %v", []string{c.addr(0), c.addr(1)})
+		c.assertEvents(0,
+			events{
+				1: {swim.Alive, swim.Dead},
+			},
+		)
+		c.assertEvents(1,
+			events{
+				0: {swim.Alive, swim.Dead},
+			},
+		)
 		cancel()
 	})
 }
@@ -201,7 +227,16 @@ func TestProbeNoPeers(t *testing.T) {
 		time.Sleep(c.protocolPeriod * 4)
 		synctest.Wait()
 
-		assert.EqualValues(t, c.dead(0), []string{c.addr(1)}, "node 1 must be declared dead by node 0 %v", []string{c.addr(0), c.addr(1)})
+		c.assertEvents(0,
+			events{
+				1: {swim.Alive, swim.Dead},
+			},
+		)
+		c.assertEvents(1,
+			events{
+				0: {swim.Alive, swim.Dead},
+			},
+		)
 		cancel()
 	})
 }
