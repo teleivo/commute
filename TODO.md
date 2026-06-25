@@ -1,19 +1,8 @@
 # TODO
 
-## SWIM
-
-* Should I rather pass in rand.Source instead of rand.Rng?
-
-* Rethink ports and the swim/server relationship. Currently `AppPort` in `swim.Config` leaks an
-  application-layer concern (the HTTP API port) into the SWIM layer. Consul/memberlist solve this
-  cleanly via an opaque `Meta []byte` blob that the application embeds in every membership message
-  and decodes itself — SWIM propagates it without interpreting it. Consider replacing `AppPort`
-  with a `Meta []byte` field on `Config` and `Peer` so the SWIM layer stays protocol-agnostic.
-
-* per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
-  dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
-
-* suspicion and the issue below
+* suspicion and the issue below. Notifier must be delivered via a single goroutine draining a
+  channel (not `go notify()` per event): suspicion makes state reversible (Alive→Suspect→Dead→Alive),
+  so concurrent goroutines can reorder notifications and leave consumers with stale state.
 * cold-start bug: on startup, a peer added via `JoinHandler` (another node's bootstrap contacting
   us) can be declared dead before it is ever successfully probed. The sequence on Fly.io:
   * node-1/node-2 boot and their bootstrap loop immediately contacts node-0's `JoinHandler` via
@@ -60,11 +49,23 @@
   * piggybacking: alive events received via piggybacking are silently dropped for now; revisit when
     SWIM++ adds incarnation numbers and alive refutation
 
+## SWIM
+
+* per-round ack channel: a stale ack sitting in the shared buffer causes the real ack to be
+  dropped, falling back to indirect probing unnecessarily; a fresh channel per round fixes this
+
+* Rethink ports and the swim/server relationship. Currently `AppPort` in `swim.Config` leaks an
+  application-layer concern (the HTTP API port) into the SWIM layer. Consul/memberlist solve this
+  cleanly via an opaque `Meta []byte` blob that the application embeds in every membership message
+  and decodes itself — SWIM propagates it without interpreting it. Consider replacing `AppPort`
+  with a `Meta []byte` field on `Config` and `Peer` so the SWIM layer stays protocol-agnostic.
+
 * make hardcoded timeouts configurable via flags: gossip ack timeout (server.go, currently 5s),
   SWIM bootstrap join timeout (swim.go, currently 5s), idle timeout?
 
 ## Testing
 
+* should I rather pass in rand.Source instead of rand.Rng?
 * unexport most methods in Server so the API is as clean as Member. I think I just have StartGossip
   and so on exported because it was easier to test at first.
 * can I add logs back? they did cause trouble with the synctest at some point. Was that due to
