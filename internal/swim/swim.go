@@ -50,7 +50,7 @@ type Member struct {
 	acks         chan Ack
 	eventQueue   EventQueue
 	notifier     Notifier
-	events       chan Event
+	events       <-chan Event
 	logger       *slog.Logger
 }
 
@@ -234,6 +234,7 @@ func (m *Member) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case e := <-m.events:
+				m.eventQueue.Push(EventItem{Event: e})
 				m.notifier.Notify(NewPeer(e.Node), e.Kind)
 			}
 		}
@@ -292,7 +293,7 @@ func (m *Member) Listen(ctx context.Context) {
 			switch e.Kind {
 			case Dead:
 				logger.Info("peer is dead", "peer", e.Node, "source", addr)
-				m.deletePeer(e.Node)
+				m.peers.process(e)
 			}
 		}
 
@@ -438,7 +439,7 @@ func (m *Member) Probe(ctx context.Context) {
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
 				logger.Info("peer is dead", "peer", peer.udpAddr, "period", period)
-				m.deletePeer(peer.udpAddr)
+				m.peers.process(Event{Kind: Dead, Node: peer.udpAddr})
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr == peer.udpAddr {
@@ -568,24 +569,18 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Member) join(logger *slog.Logger, req joinBody) {
+	// TODO should this cause an Alive event? or be treated differently? if its different how does
+	// This side channel interact with the swim protocol and incarnation?
+	// TODO peers process(Event) internally should put Event on m.events if it is a new one i.e. one
+	// that overrides the last known state for a peer
 	added := m.peers.join(m.UDPAddr(), req)
+	// for _, p := range added {
+	// 	e := Event{Kind: Alive, Node: p.UDPAddr()}
+	// }
 	if len(added) == 0 {
 		return
 	}
 	logger.Info("added peers", "handler", "join", "peers_added", len(added))
-	for _, p := range added {
-		e := Event{Kind: Alive, Node: p.UDPAddr()}
-		// TODO move the eventQueue push into notify as well?
-		m.eventQueue.Push(EventItem{Event: e})
-		m.notify(e)
-	}
-}
-
-func (m *Member) notify(e Event) {
-	if m.notifier == nil {
-		return
-	}
-	m.events <- e
 }
 
 func (m *Member) deletePeer(peer string) {
@@ -594,10 +589,9 @@ func (m *Member) deletePeer(peer string) {
 	if deleted := m.peers.delete(peer); !deleted {
 		return
 	}
-
-	e := Event{Kind: Dead, Node: peer}
-	m.eventQueue.Push(EventItem{Event: e})
-	m.notify(e)
+	// TODO peers process(Event) internally should put Event on m.events if it is a new one i.e. one
+	// that overrides the last known state for a peer
+	// e := Event{Kind: Dead, Node: peer}
 }
 
 // send delivers msg to peer by resolving its UDP address and writing the message.
@@ -681,6 +675,7 @@ type peers struct {
 	probeCursor  int
 	subgroupSize int
 	deadPeers    map[string]struct{} // keyed by UDP addr
+	events       chan<- Event
 	mu           sync.RWMutex
 	rng          *rand.Rand
 }
@@ -767,6 +762,17 @@ func (p *peers) asJoinBody(self string, appPort uint16) joinBody {
 	p.mu.RUnlock()
 	joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: self, HTTPPort: appPort}
 	return joinBody{Src: self, Peers: joinPeers}
+}
+
+// TODO get Event so we can directly call this from Listen, but maybe another signature using a
+// Peer is nicer for some internal calls?
+// TODO return anything?
+func (p *peers) process(e Event) {
+	switch e.Kind {
+	case Alive:
+	case Dead:
+		p.delete(e.Node)
+	}
 }
 
 func (p *peers) join(self string, body joinBody) []Peer {
