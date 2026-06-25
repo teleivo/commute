@@ -50,6 +50,7 @@ type Member struct {
 	acks         chan Ack
 	eventQueue   EventQueue
 	notifier     Notifier
+	events       chan Event
 	logger       *slog.Logger
 }
 
@@ -174,6 +175,10 @@ func New(cfg Config) (*Member, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
+	var events chan Event
+	if cfg.Notifier != nil {
+		events = make(chan Event) // TODO blocking or not? if blocking then this could stall the Probe and Bootstrap loops. On the JoinHandler it would only add latency which might not be an issue. JoinHandler I wonder about the semantics of returning early with a buffererd channel would that suggest join was done and its noted in the swim component but it might take a bit for the server component to catch up. What is a good buffer size? Does that related to the cluster size? Configurable?
+	}
 	m := &Member{
 		nodeID:              cfg.NodeID,
 		advertiseHost:       cfg.AdvertiseHost,
@@ -193,6 +198,7 @@ func New(cfg Config) (*Member, error) {
 		acks:                make(chan Ack, 1), // shared across rounds; a stale ack can evict a live one via the non-blocking send in Listen
 		eventQueue:          EventQueue{},
 		notifier:            cfg.Notifier,
+		events:              events,
 		logger:              logger,
 	}
 	handler.HandleFunc("POST /internal/swim/join", m.JoinHandler)
@@ -221,6 +227,16 @@ func (m *Member) Start(ctx context.Context) error {
 	})
 	wg.Go(func() {
 		m.Probe(ctx)
+	})
+	wg.Go(func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e := <-m.events:
+				m.notifier.Notify(NewPeer(e.Node), e.Kind)
+			}
+		}
 	})
 	wg.Go(func() {
 		<-ctx.Done()
@@ -558,11 +574,18 @@ func (m *Member) join(logger *slog.Logger, req joinBody) {
 	}
 	logger.Info("added peers", "handler", "join", "peers_added", len(added))
 	for _, p := range added {
-		m.eventQueue.Push(EventItem{Event: Event{Kind: Alive, Node: p.UDPAddr()}})
-		if m.notifier != nil {
-			go m.notifier.Notify(p, Alive)
-		}
+		e := Event{Kind: Alive, Node: p.UDPAddr()}
+		// TODO move the eventQueue push into notify as well?
+		m.eventQueue.Push(EventItem{Event: e})
+		m.notify(e)
 	}
+}
+
+func (m *Member) notify(e Event) {
+	if m.notifier == nil {
+		return
+	}
+	m.events <- e
 }
 
 func (m *Member) deletePeer(peer string) {
@@ -572,10 +595,9 @@ func (m *Member) deletePeer(peer string) {
 		return
 	}
 
-	m.eventQueue.Push(EventItem{Event: Event{Kind: Dead, Node: peer}})
-	if m.notifier != nil {
-		go m.notifier.Notify(NewPeer(peer), Dead)
-	}
+	e := Event{Kind: Dead, Node: peer}
+	m.eventQueue.Push(EventItem{Event: e})
+	m.notify(e)
 }
 
 // send delivers msg to peer by resolving its UDP address and writing the message.
