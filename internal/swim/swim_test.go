@@ -167,28 +167,25 @@ func TestProbeIndirectFailPeerDead(t *testing.T) {
 
 		c.assertEvents(0,
 			events{
-				1: {swim.Alive, swim.Dead},
+				1: {swim.Alive, swim.Suspect, swim.Dead},
 				2: {swim.Alive},
 			},
 		)
 		c.assertEvents(1,
 			events{
-				0: {swim.Alive, swim.Dead},
-				2: {swim.Alive, swim.Dead},
+				0: {swim.Alive, swim.Suspect, swim.Dead},
+				2: {swim.Alive, swim.Suspect, swim.Dead},
 			},
 		)
 		c.assertEvents(2,
 			events{
 				0: {swim.Alive},
-				1: {swim.Alive, swim.Dead},
+				1: {swim.Alive, swim.Suspect, swim.Dead},
 			},
 		)
 		cancel()
 	})
 }
-
-// TODO add test to refute
-// TODO how to test incarnation number logic
 
 // TestProbeDirectFailPeerDead verifies that a peer that never replies is declared dead.
 func TestProbeDirectFailPeerDead(t *testing.T) {

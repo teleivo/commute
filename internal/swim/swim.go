@@ -445,6 +445,7 @@ func (m *Member) Probe(ctx context.Context) {
 				}
 			case <-periodTimer.C:
 				// period ended without getting an ack so peer is declared dead
+				// TODO peer should now be suspect and event be dissiminated
 				ackTimeout.Stop()
 				logger.Info("peer is dead", "peer", peer.udpAddr, "period", period)
 				m.peers.process(ctx, Event{Kind: Dead, Node: peer.udpAddr})
@@ -664,6 +665,9 @@ func (p Peer) HTTPAddr() string {
 }
 
 type peers struct {
+	// TODO keep a map[string] to some struct with kind and incarnation number or just Event for
+	// simplicity for now?
+	// TODO how to test this ideally mostly in unit tests?
 	peers        []Peer
 	probeCursor  int
 	subgroupSize int
