@@ -16,8 +16,8 @@ import (
 	"github.com/teleivo/commute/internal/swim"
 )
 
-// TestBootstrapStartsWithNoSeeds verifies that New succeeds and the node runs
-// as a cluster of one when the seed list is empty.
+// TestBootstrapStartsWithNoSeeds verifies that New succeeds and the node runs as a cluster of one
+// when the seed list is empty.
 func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0"})
@@ -32,6 +32,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -70,6 +71,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -108,6 +110,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -122,6 +125,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -175,6 +179,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -190,6 +195,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -204,6 +210,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[2].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 

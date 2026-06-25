@@ -21,6 +21,7 @@ func TestNew(t *testing.T) {
 		ProtocolPeriod: 1 * time.Second,
 		AckTimeout:     500 * time.Millisecond,
 		SubgroupSize:   3,
+		Notifier:       noopNotifier{},
 	}
 
 	tests := map[string]struct {
@@ -72,6 +73,10 @@ func TestNew(t *testing.T) {
 		},
 		"ZeroSubgroupSize": {
 			cfg:     func() swim.Config { c := validConfig; c.SubgroupSize = 0; return c }(),
+			wantErr: true,
+		},
+		"MissingNotifier": {
+			cfg:     func() swim.Config { c := validConfig; c.Notifier = nil; return c }(),
 			wantErr: true,
 		},
 	}

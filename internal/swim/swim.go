@@ -50,7 +50,7 @@ type Member struct {
 	acks         chan Ack
 	eventQueue   EventQueue
 	notifier     Notifier
-	events       chan Event
+	events       <-chan Event
 	logger       *slog.Logger
 }
 
@@ -73,7 +73,7 @@ type Config struct {
 
 	Rng          *rand.Rand   // random source for peer selection
 	BootstrapRng *rand.Rand   // random source for bootstrap interval jitter
-	Notifier     Notifier     // if nil, membership changes are not reported
+	Notifier     Notifier     // called when a peer's membership status changes
 	Logger       *slog.Logger // if nil, logging is disabled
 }
 
@@ -175,10 +175,12 @@ func New(cfg Config) (*Member, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
-	var events chan Event
-	if cfg.Notifier != nil {
-		events = make(chan Event) // TODO blocking or not? if blocking then this could stall the Probe and Bootstrap loops. On the JoinHandler it would only add latency which might not be an issue. JoinHandler I wonder about the semantics of returning early with a buffererd channel would that suggest join was done and its noted in the swim component but it might take a bit for the server component to catch up. What is a good buffer size? Does that related to the cluster size? Configurable?
+	if cfg.Notifier == nil {
+		return nil, errors.New("notifier is required")
 	}
+	// buffered to avoid blocking the Probe and Listen loops during bootstrap bursts assumes a
+	// cluster of ~30 nodes
+	events := make(chan Event, 64)
 	m := &Member{
 		nodeID:              cfg.NodeID,
 		advertiseHost:       cfg.AdvertiseHost,
@@ -189,7 +191,7 @@ func New(cfg Config) (*Member, error) {
 		seeds:               slices.Collect(maps.Keys(seeds)),
 		httpClient:          client,
 		resolve:             resolve,
-		peers:               newPeers(rng, cfg.SubgroupSize),
+		peers:               newPeers(rng, cfg.SubgroupSize, events),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
 		subgroupSize:        cfg.SubgroupSize,
@@ -233,8 +235,9 @@ func (m *Member) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return
-			case e := <-m.events:
-				m.notifier.Notify(NewPeer(e.Node), e.Kind)
+			case e := <-m.events: // fan-out to event queue for SWIM piggyback and notifier for the server component
+				m.eventQueue.Push(EventItem{Event: e})
+				go m.notifier.Notify(NewPeer(e.Node), e.Kind)
 			}
 		}
 	})
@@ -292,7 +295,7 @@ func (m *Member) Listen(ctx context.Context) {
 			switch e.Kind {
 			case Dead:
 				logger.Info("peer is dead", "peer", e.Node, "source", addr)
-				m.deletePeer(e.Node)
+				m.peers.process(ctx, e)
 			}
 		}
 
@@ -438,7 +441,7 @@ func (m *Member) Probe(ctx context.Context) {
 				// period ended without getting an ack so peer is declared dead
 				ackTimeout.Stop()
 				logger.Info("peer is dead", "peer", peer.udpAddr, "period", period)
-				m.deletePeer(peer.udpAddr)
+				m.peers.process(ctx, Event{Kind: Dead, Node: peer.udpAddr})
 				break waitAck
 			case a := <-m.acks:
 				if a.Period == period && a.Addr == peer.udpAddr {
@@ -522,7 +525,7 @@ func (m *Member) Bootstrap(ctx context.Context) {
 				logger.Warn("failed to decode join response", "seed", seed, "error", err)
 				continue
 			}
-			m.join(logger, joined)
+			m.join(ctx, logger, joined)
 
 			seeds = append(seeds, seed)
 		}
@@ -558,7 +561,7 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	m.join(logger, req)
+	m.join(r.Context(), logger, req)
 
 	e := json.NewEncoder(w)
 	err = e.Encode(m.peers.asJoinBody(m.UDPAddr(), m.appPort))
@@ -567,37 +570,15 @@ func (m *Member) JoinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m *Member) join(logger *slog.Logger, req joinBody) {
+func (m *Member) join(ctx context.Context, logger *slog.Logger, req joinBody) {
 	added := m.peers.join(m.UDPAddr(), req)
+	for _, p := range added {
+		m.peers.process(ctx, Event{Kind: Alive, Node: p.UDPAddr()})
+	}
 	if len(added) == 0 {
 		return
 	}
 	logger.Info("added peers", "handler", "join", "peers_added", len(added))
-	for _, p := range added {
-		e := Event{Kind: Alive, Node: p.UDPAddr()}
-		// TODO move the eventQueue push into notify as well?
-		m.eventQueue.Push(EventItem{Event: e})
-		m.notify(e)
-	}
-}
-
-func (m *Member) notify(e Event) {
-	if m.notifier == nil {
-		return
-	}
-	m.events <- e
-}
-
-func (m *Member) deletePeer(peer string) {
-	// Peer was already removed (e.g. dead event piggybacked while Probe was also declaring it
-	// dead). Skip enqueue and notification to avoid duplicate dissemination.
-	if deleted := m.peers.delete(peer); !deleted {
-		return
-	}
-
-	e := Event{Kind: Dead, Node: peer}
-	m.eventQueue.Push(EventItem{Event: e})
-	m.notify(e)
 }
 
 // send delivers msg to peer by resolving its UDP address and writing the message.
@@ -680,17 +661,21 @@ type peers struct {
 	peers        []Peer
 	probeCursor  int
 	subgroupSize int
+	state        map[string]Event    // keyed by UDP addr
 	deadPeers    map[string]struct{} // keyed by UDP addr
+	events       chan<- Event
 	mu           sync.RWMutex
 	rng          *rand.Rand
 }
 
-func newPeers(rng *rand.Rand, subgroupSize int) *peers {
+func newPeers(rng *rand.Rand, subgroupSize int, events chan<- Event) *peers {
 	return &peers{
 		subgroupSize: subgroupSize,
 		peers:        make([]Peer, 0),
+		state:        make(map[string]Event),
 		deadPeers:    make(map[string]struct{}),
 		rng:          rng,
+		events:       events,
 	}
 }
 
@@ -767,6 +752,31 @@ func (p *peers) asJoinBody(self string, appPort uint16) joinBody {
 	p.mu.RUnlock()
 	joinPeers[len(joinPeers)-1] = joinPeer{UDPAddr: self, HTTPPort: appPort}
 	return joinBody{Src: self, Peers: joinPeers}
+}
+
+func (p *peers) process(ctx context.Context, e Event) {
+	p.mu.Lock()
+	state, ok := p.state[e.Node]
+	if ok && state.Kind == e.Kind {
+		p.mu.Unlock()
+		return
+	}
+	p.state[e.Node] = e
+	p.mu.Unlock()
+
+	switch e.Kind {
+	case Alive:
+		select {
+		case <-ctx.Done():
+		case p.events <- e:
+		}
+	case Dead:
+		p.delete(e.Node)
+		select {
+		case <-ctx.Done():
+		case p.events <- e:
+		}
+	}
 }
 
 func (p *peers) join(self string, body joinBody) []Peer {
