@@ -360,7 +360,3 @@ func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []st
 	}
 	return addrs
 }
-
-type noopNotifier struct{}
-
-func (n noopNotifier) Notify(peer swim.Peer, kind swim.EventKind) {}

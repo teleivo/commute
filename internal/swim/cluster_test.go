@@ -403,3 +403,7 @@ func newFakeListener() net.Listener {
 		closed: make(chan struct{}),
 	}
 }
+
+type noopNotifier struct{}
+
+func (n noopNotifier) Notify(peer swim.Peer, kind swim.EventKind) {}
