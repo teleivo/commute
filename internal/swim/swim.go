@@ -189,7 +189,7 @@ func New(cfg Config) (*Member, error) {
 		seeds:               slices.Collect(maps.Keys(seeds)),
 		httpClient:          client,
 		resolve:             resolve,
-		peers:               newPeers(rng, cfg.SubgroupSize),
+		peers:               newPeers(rng, cfg.SubgroupSize, events),
 		protocolPeriod:      cfg.ProtocolPeriod,
 		ackTimeout:          cfg.AckTimeout,
 		subgroupSize:        cfg.SubgroupSize,
@@ -233,7 +233,7 @@ func (m *Member) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return
-			case e := <-m.events:
+			case e := <-m.events: // fan-out to event queue for SWIM piggyback and notifier for the server component
 				m.eventQueue.Push(EventItem{Event: e})
 				m.notifier.Notify(NewPeer(e.Node), e.Kind)
 			}
@@ -290,6 +290,7 @@ func (m *Member) Listen(ctx context.Context) {
 		}
 
 		for _, e := range msg.Events {
+			// TODO why only Dead events?
 			switch e.Kind {
 			case Dead:
 				logger.Info("peer is dead", "peer", e.Node, "source", addr)
@@ -574,24 +575,14 @@ func (m *Member) join(logger *slog.Logger, req joinBody) {
 	// TODO peers process(Event) internally should put Event on m.events if it is a new one i.e. one
 	// that overrides the last known state for a peer
 	added := m.peers.join(m.UDPAddr(), req)
-	// for _, p := range added {
-	// 	e := Event{Kind: Alive, Node: p.UDPAddr()}
-	// }
+	for _, p := range added {
+		e := Event{Kind: Alive, Node: p.UDPAddr()}
+		m.peers.process(e)
+	}
 	if len(added) == 0 {
 		return
 	}
 	logger.Info("added peers", "handler", "join", "peers_added", len(added))
-}
-
-func (m *Member) deletePeer(peer string) {
-	// Peer was already removed (e.g. dead event piggybacked while Probe was also declaring it
-	// dead). Skip enqueue and notification to avoid duplicate dissemination.
-	if deleted := m.peers.delete(peer); !deleted {
-		return
-	}
-	// TODO peers process(Event) internally should put Event on m.events if it is a new one i.e. one
-	// that overrides the last known state for a peer
-	// e := Event{Kind: Dead, Node: peer}
 }
 
 // send delivers msg to peer by resolving its UDP address and writing the message.
@@ -674,18 +665,21 @@ type peers struct {
 	peers        []Peer
 	probeCursor  int
 	subgroupSize int
+	state        map[string]Event    // keyed by UDP addr
 	deadPeers    map[string]struct{} // keyed by UDP addr
 	events       chan<- Event
 	mu           sync.RWMutex
 	rng          *rand.Rand
 }
 
-func newPeers(rng *rand.Rand, subgroupSize int) *peers {
+func newPeers(rng *rand.Rand, subgroupSize int, events chan<- Event) *peers {
 	return &peers{
 		subgroupSize: subgroupSize,
 		peers:        make([]Peer, 0),
+		state:        make(map[string]Event),
 		deadPeers:    make(map[string]struct{}),
 		rng:          rng,
+		events:       events,
 	}
 }
 
@@ -766,12 +760,22 @@ func (p *peers) asJoinBody(self string, appPort uint16) joinBody {
 
 // TODO get Event so we can directly call this from Listen, but maybe another signature using a
 // Peer is nicer for some internal calls?
-// TODO return anything?
 func (p *peers) process(e Event) {
+	p.mu.Lock()
+	state, ok := p.state[e.Node]
+	if ok && state.Kind == e.Kind {
+		p.mu.Unlock()
+		return
+	}
+	p.state[e.Node] = e
+	p.mu.Unlock()
+
 	switch e.Kind {
 	case Alive:
+		p.events <- e
 	case Dead:
 		p.delete(e.Node)
+		p.events <- e
 	}
 }
 
