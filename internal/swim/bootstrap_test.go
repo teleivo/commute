@@ -16,10 +16,9 @@ import (
 	"github.com/teleivo/commute/internal/swim"
 )
 
-// TestBootstrapStartsWithNoSeeds verifies that New succeeds and the node runs
-// as a cluster of one when the seed list is empty.
+// TestBootstrapStartsWithNoSeeds verifies that New succeeds and the node runs as a cluster of one
+// when the seed list is empty.
 func TestBootstrapStartsWithNoSeeds(t *testing.T) {
-	t.Skip()
 	synctest.Test(t, func(t *testing.T) {
 		network := newNetwork(t, []string{"machine-0"})
 		m, err := swim.New(swim.Config{
@@ -33,6 +32,7 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -57,7 +57,6 @@ func TestBootstrapStartsWithNoSeeds(t *testing.T) {
 // TestBootstrapSeedUnresolvableAtStartup verifies that New succeeds even when
 // seeds cannot be resolved, and that unresolvable seeds are never added as peers.
 func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
-	t.Skip()
 	synctest.Test(t, func(t *testing.T) {
 		// network has 1 node. node-1 is not registered so resolve returns an error.
 		network := newNetwork(t, []string{"machine-0"})
@@ -72,6 +71,7 @@ func TestBootstrapSeedUnresolvableAtStartup(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -110,6 +110,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -124,6 +125,7 @@ func TestBootstrapJoinsWhenSeedBecomesResolvable(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -177,6 +179,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[0].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -192,6 +195,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[1].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -206,6 +210,7 @@ func TestBootstrapJoinPushPull(t *testing.T) {
 			AckTimeout:     500 * time.Millisecond,
 			SubgroupSize:   1,
 			HTTPClient:     &http.Client{Transport: &nodeTransport{network: network, hostAddr: network.conns[2].hostAddr}},
+			Notifier:       noopNotifier{},
 		})
 		require.NoError(t, err)
 
@@ -355,3 +360,7 @@ func joinMembers(t *testing.T, m *swim.Member, src string, peers ...string) []st
 	}
 	return addrs
 }
+
+type noopNotifier struct{}
+
+func (n noopNotifier) Notify(peer swim.Peer, kind swim.EventKind) {}

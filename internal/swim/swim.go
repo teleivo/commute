@@ -175,10 +175,7 @@ func New(cfg Config) (*Member, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
-	var events chan Event
-	if cfg.Notifier != nil {
-		events = make(chan Event) // TODO blocking or not? if blocking then this could stall the Probe and Bootstrap loops. On the JoinHandler it would only add latency which might not be an issue. JoinHandler I wonder about the semantics of returning early with a buffererd channel would that suggest join was done and its noted in the swim component but it might take a bit for the server component to catch up. What is a good buffer size? Does that related to the cluster size? Configurable?
-	}
+	events := make(chan Event) // TODO blocking or not? if blocking then this could stall the Probe and Bootstrap loops. On the JoinHandler it would only add latency which might not be an issue. JoinHandler I wonder about the semantics of returning early with a buffererd channel would that suggest join was done and its noted in the swim component but it might take a bit for the server component to catch up. What is a good buffer size? Does that related to the cluster size? Configurable?
 	m := &Member{
 		nodeID:              cfg.NodeID,
 		advertiseHost:       cfg.AdvertiseHost,

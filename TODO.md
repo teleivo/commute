@@ -1,5 +1,7 @@
 # TODO
 
+* what if there is no notifier? does that even make sense?
+
 ## SWIM
 
 * Should I rather pass in rand.Source instead of rand.Rng?
