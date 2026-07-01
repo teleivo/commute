@@ -1,17 +1,64 @@
 package swim
 
 import (
+	"context"
 	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/netip"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/teleivo/assertive/assert"
 	"github.com/teleivo/assertive/require"
 )
+
+func TestPeers(t *testing.T) {
+	// TODO test naming/structure: this one is for refute
+	synctest.Test(t, func(t *testing.T) {
+		// Alive inc = i overrides
+		// Suspect inc = j, i > j
+		// Alive inc = j, i > j
+
+		// TODO should this be buffered in tests? or advance after each process by time.Sleep or so?
+		events := make(chan Event, 100)
+		// WHY panic and all blocked when unbuffered
+		// events := make(chan Event)
+		// TODO why 2 seeds for PCG? and what is their impact?
+		p := newPeers(rand.New(rand.NewPCG(16, 0)), 1, events)
+		// TODO what context should I use? I now use it so I can safely close the channel. not sure
+		// if I should add a close method on peers as it actually owns the channel
+		ctx, cancel := context.WithCancel(t.Context())
+
+		// TODO what is a nice test setup?
+		// series of events in with matching events out?
+		e := Event{Alive, 0, "A"}
+		p.process(ctx, e)
+
+		got := <-events
+		assert.EqualValues(t, got, e)
+
+		e = Event{Suspect, 0, "A"}
+		// e:=Event{Alive, 1, "A"}
+		p.process(ctx, e)
+
+		got = <-events
+		assert.EqualValues(t, got, e)
+
+		e = Event{Alive, 1, "A"}
+		p.process(ctx, e)
+
+		got = <-events
+		assert.EqualValues(t, got, e)
+
+		cancel()
+		close(events)
+
+		// assert.EqualValues(t, got, []Event{e})
+	})
+}
 
 func TestEventUnmarshalBinaryRoundTrip(t *testing.T) {
 	tests := map[string]Event{

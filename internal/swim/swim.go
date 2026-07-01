@@ -780,6 +780,11 @@ func (p *peers) process(ctx context.Context, e Event) {
 		case <-ctx.Done():
 		case p.events <- e:
 		}
+	case Suspect:
+		select {
+		case <-ctx.Done():
+		case p.events <- e:
+		}
 	case Dead:
 		p.delete(e.Node)
 		select {
